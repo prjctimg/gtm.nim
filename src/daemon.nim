@@ -47,7 +47,7 @@ type
     intArg*: int
     strArg2*: string
     strArg3*: string
-    strArg4*: string
+
 
   ClientState* = object
     sock*: Socket
@@ -62,7 +62,6 @@ type
     currentTrackPath: string
     currentTrackTitle: string
     currentTrackChannel: string
-    currentTrackThumbnail: string
     trackHistory: seq[string]
     idleFrames: int
     idleTimeout: int
@@ -155,7 +154,6 @@ proc parseDaemonCommand(line: string): DaemonCmd =
       result.kind = dckLoadFile; result.strArg = j{"path"}.getStr("")
       result.strArg2 = j{"title"}.getStr("")
       result.strArg3 = j{"channel"}.getStr("")
-      result.strArg4 = j{"thumbnail"}.getStr("")
     of "quit": result.kind = dckQuit
     of "status": result.kind = dckStatus
     of "now_playing": result.kind = dckNowPlaying
@@ -271,7 +269,6 @@ proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): JsonNode =
         obj["track_path"] = %d.currentTrackPath
         obj["track_title"] = %d.currentTrackTitle
         obj["track_channel"] = %d.currentTrackChannel
-        obj["track_thumbnail"] = %d.currentTrackThumbnail
         obj["auto_advanced"] = %d.autoAdvancing
     of aekPlaybackPaused: obj["state"] = %"paused"
     of aekPlaybackStopped: obj["state"] = %"stopped"
@@ -385,6 +382,16 @@ proc advanceToNextTrack(d: Daemon, forward: bool = true): bool =
           d.currentTrackChannel = d.ytDownloadedMeta[nextCandidate].channel
       elif nextCandidate in d.ytStreamUrls:
         loadPath = d.ytStreamUrls[nextCandidate]
+        # Use pending download metadata as fallback for title/channel
+        if nextCandidate in d.ytDownloadedMeta:
+          d.currentTrackTitle = d.ytDownloadedMeta[nextCandidate].title
+          d.currentTrackChannel = d.ytDownloadedMeta[nextCandidate].channel
+        elif d.currentTrackPath != loadPath:
+          for t in d.ytDownloadTasks:
+            if t.url == nextCandidate and t.title.len > 0:
+              d.currentTrackTitle = t.title
+              d.currentTrackChannel = t.channel
+              break
         # Ensure download is running in background
         var alreadyDL = false
         for t in d.ytDownloadTasks:
@@ -455,7 +462,6 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
       d.currentTrackPath = cmd.strArg
       d.currentTrackTitle = cmd.strArg2
       d.currentTrackChannel = cmd.strArg3
-      d.currentTrackThumbnail = cmd.strArg4
       d.player.play()
       d.idleFrames = 0
       # Poll events once so state reflects actual playback status
@@ -726,7 +732,6 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
     result["time_pos"] = %d.player.timePos
     result["duration"] = %d.player.duration
     result["track_path"] = %d.currentTrackPath
-    result["track_thumbnail"] = %d.currentTrackThumbnail
     if d.currentTrackPath.len > 0:
       if d.currentTrackTitle.len > 0:
         result["track_title"] = %d.currentTrackTitle
@@ -853,7 +858,6 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
     result["track_path"] = %d.currentTrackPath
     result["track_title"] = %d.currentTrackTitle
     result["track_channel"] = %d.currentTrackChannel
-    result["track_thumbnail"] = %d.currentTrackThumbnail
     result["track_album"] = %d.player.metadata.album
     result["crossfading"] = %d.player.getStatusFlags().crossfading
     result["master_ended"] = %d.player.getStatusFlags().masterEnded
@@ -1038,16 +1042,17 @@ proc trySend(client: Socket, data: string): bool =
     return false
   return true
 
-proc cleanupClientState(d: Daemon) =
-  if d.ytSearchActive:
-    try: d.ytSearchProcess.terminate() except: discard
-    close(d.ytSearchProcess)
-  if d.ytStreamActive:
-    try: d.ytStreamProcess.terminate() except: discard
-    close(d.ytStreamProcess)
-  d.ytSearchActive = false
-  d.ytSearchBuf = ""
-  d.ytSearchResults = @[]
+when false:
+  proc cleanupClientState(d: Daemon) =
+    if d.ytSearchActive:
+      try: d.ytSearchProcess.terminate() except: discard
+      close(d.ytSearchProcess)
+    if d.ytStreamActive:
+      try: d.ytStreamProcess.terminate() except: discard
+      close(d.ytStreamProcess)
+    d.ytSearchActive = false
+    d.ytSearchBuf = ""
+    d.ytSearchResults = @[]
   d.ytStreamActive = false
   d.ytStreamBuf = ""
   d.ytStreamResultUrl = ""

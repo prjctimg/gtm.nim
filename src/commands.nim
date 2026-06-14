@@ -87,29 +87,29 @@ proc parseKeyCode*(name: string): iw.Key =
     if name.len == 1:
       let c = name[0]
       if c in {'a'..'z'}:
-        iw.Key(ord(iw.Key.A) + (c.ord - 'a'.ord))
+        cast[iw.Key](ord(iw.Key.A) + (c.ord - 'a'.ord))
       elif c in {'A'..'Z'}:
-        iw.Key(ord(iw.Key.ShiftA) + (c.ord - 'A'.ord))
+        cast[iw.Key](ord(iw.Key.ShiftA) + (c.ord - 'A'.ord))
       elif c in {'0'..'9'}:
-        iw.Key(ord(iw.Key.Zero) + (c.ord - '0'.ord))
+        cast[iw.Key](ord(iw.Key.Zero) + (c.ord - '0'.ord))
       else:
         iw.Key.None
     elif name.startsWith("Shift") and name.len > 5:
       let c = name[5]
       if c in {'A'..'Z'}:
-        iw.Key(ord(iw.Key.ShiftA) + (c.ord - 'A'.ord))
+        cast[iw.Key](ord(iw.Key.ShiftA) + (c.ord - 'A'.ord))
       else:
         iw.Key.None
     elif name.startsWith("Ctrl") and name.len > 4:
       let c = name[4]
       if c in {'A'..'Z'}:
-        iw.Key(ord(iw.Key.CtrlA) + (c.ord - 'A'.ord))
+        cast[iw.Key](ord(iw.Key.CtrlA) + (c.ord - 'A'.ord))
       else:
         iw.Key.None
     elif name.startsWith("Alt") and name.len > 3:
       let c = name[3]
       if c in {'A'..'Z'}:
-        iw.Key(ord(iw.Key.AltA) + (c.ord - 'A'.ord))
+        cast[iw.Key](ord(iw.Key.AltA) + (c.ord - 'A'.ord))
       else:
         iw.Key.None
     else:

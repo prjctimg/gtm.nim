@@ -213,9 +213,9 @@ proc sendAsync*(cli: DaemonClient, cmd: JsonNode, callback: proc(resp: JsonNode)
   except:
     discard
 
-method loadFile*(cli: DaemonClient, path: string, title: string = "", channel: string = "", thumbnail: string = "") =
+method loadFile*(cli: DaemonClient, path: string, title: string = "", channel: string = "") =
   cli.ensureDaemon()
-  let resp = sendDaemonCmd(cli, %*{"cmd": "load_file", "path": path, "title": title, "channel": channel, "thumbnail": thumbnail})
+  let resp = sendDaemonCmd(cli, %*{"cmd": "load_file", "path": path, "title": title, "channel": channel})
   cli.lastTrackId = 0
   if resp.hasKey("track_id"):
     cli.lastTrackId = resp["track_id"].getInt().int64
@@ -257,7 +257,7 @@ method getStatusFlags*(cli: DaemonClient): tuple[crossfading, masterEnded: bool]
   let resp = daemonSimpleCmd(cli, "status")
   (resp{"crossfading"}.getBool(false), resp{"master_ended"}.getBool(false))
 
-method startCrossfade*(cli: DaemonClient, durationSeconds: float) =
+proc startCrossfade*(cli: DaemonClient, durationSeconds: float) =
   cli.ensureDaemon()
   cli.sendOnly(%*{"cmd": "crossfade", "duration": durationSeconds})
 
@@ -506,9 +506,9 @@ proc ytSearchCancel*(cli: DaemonClient) =
   cli.ensureDaemon()
   sendOnly(cli, %*{"cmd": "yt_search_cancel"})
 
-proc ytResolveStream*(cli: DaemonClient, url: string): JsonNode =
+proc ytResolveStream*(cli: DaemonClient, url, title, channel: string): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "yt_resolve_stream", "url": url})
+  sendDaemonCmd(cli, %*{"cmd": "yt_resolve_stream", "url": url, "title": title, "channel": channel})
 
 proc ytResolveStreamPoll*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()

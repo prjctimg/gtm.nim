@@ -7,13 +7,13 @@ from nimwave/tui import nil
 from illwave as iw import `[]`, `[]=`, `==`
 from unicode import `$`, runeLen, toRunes
 
-method mount*(node: nw.Node, ctx: var nw.Context[State]) {.base, locks: "unknown".} =
+method mount*(node: nw.Node, ctx: var nw.Context[State]) {.base.} =
   discard
 
-method render*(node: nw.Node, ctx: var nw.Context[State]) {.base, locks: "unknown".} =
+method render*(node: nw.Node, ctx: var nw.Context[State]) {.base.} =
   discard
 
-method unmount*(node: nw.Node, ctx: var nw.Context[State]) {.base, locks: "unknown".} =
+method unmount*(node: nw.Node, ctx: var nw.Context[State]) {.base.} =
   discard
 
 proc renderRoot*(node: nw.Node, ctx: var nw.Context[State]) =
