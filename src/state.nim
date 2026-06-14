@@ -139,7 +139,6 @@ type
     url*: string
     duration*: string
     channel*: string
-    thumbnail*: string
     playlistTitle*: string
     kind*: YtSearchResultKind
 
@@ -147,7 +146,6 @@ type
     title*: string
     url*: string
     channel*: string
-    thumbnail*: string
     trackCount*: int
     tracks*: seq[YtSearchResult]
 
@@ -357,20 +355,13 @@ type
     ytPlaylistFetching*: bool
     currentPlayingTitle*: string
     currentPlayingChannel*: string
-    currentThumbnail*: string
     upNextMsg*: string
     upNextTimer*: int
     upNextScrollOffset*: int
     cursorVisible*: bool
-    artAnsi*: string
-    artAnsiLines*: int
-    artAnsiKey*: string
-    artAnsiWritten*: bool
-    artBoxX*, artBoxY*, artBoxW*, artBoxH*: int
-    artLoading*: bool
 
 const
-  GTM_VERSION* {.strdefine.} = "0.4.7"
+  GTM_VERSION* {.strdefine.} = "0.4.8"
   GTM_BUILD_TIME* {.strdefine.} = ""
 
   FooterPresets*: Table[FooterPresetName, set[FooterModule]] = {
@@ -420,6 +411,8 @@ proc getPlayingTrack*(state: AppState): Track =
     for t in state.libraryTracks:
       if t.path == state.currentPlayingPath:
         return t
+    if state.currentPlayingTitle.len > 0:
+      return Track(title: state.currentPlayingTitle, artist: state.currentPlayingChannel, path: state.currentPlayingPath)
   Track()
 
 template markDirty*(state: var AppState, event: ChangeEvent) =

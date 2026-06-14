@@ -2,10 +2,12 @@ import illwave as iw
 import ../vendor/nimwave/nimwave as nw
 from unicode import runeLen, toRunes, Rune
 import colors, sequtils, math, strutils, tables, sets, os, times, posix, osproc, options
-import state, theme, audio, library, icons, commands, albumart
+import state, theme, audio, library, icons, commands
 
 type State* = AppState
+{.push hint[DuplicateModuleImport]: off.}
 include ../vendor/nimwave/nimwave/prelude
+{.pop.}
 
 var gTermCellW*: int = 8
 var gTermCellH*: int = 16
@@ -257,21 +259,6 @@ proc showInputCursor*(state: var AppState, w, h: int) =
     gCursorX = -1
     gCursorY = -1
 
-type AlbumArtBox = ref object of nw.Node
-  charW*, charH*: int
-
-method render*(node: AlbumArtBox, ctx: var nw.Context[AppState]) =
-  let theme = ctx.data.theme
-  let w = iw.width(ctx.tb)
-  let h = iw.height(ctx.tb)
-  if w <= 0 or h <= 0: return
-  fillBg(ctx.tb, 0, 0, w - 1, h - 1, theme.surface0)
-  iw.drawRect(ctx.tb, 0, 0, w - 1, h - 1)
-  ctx.data.artBoxX = ctx.tb.x
-  ctx.data.artBoxY = ctx.tb.y
-  ctx.data.artBoxW = w
-  ctx.data.artBoxH = h
-
 type NowPlayingView = ref object of nw.Node
 method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
   let w = iw.width(ctx.tb)
@@ -295,31 +282,24 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
       writeStr(ctx.tb, 1, 2, truncateAt("Audio device unavailable — no sound output", w - 2), theme.red)
     writeStr(ctx.tb, 1, 3, truncateAt("Add music with: gtm <file|url>", w - 2), theme.subtext0)
     return
-  let artSize = computeArtSize(w, h)
-  let hasArt = artSize.charW > 0 and artSize.charH > 0
-  let showArt = ctx.data.artAnsi.len > 0
-  if hasArt and showArt:
-    var artCtx = nw.slice(ctx, 1, 0, artSize.charW, artSize.charH)
-    render(AlbumArtBox(charW: artSize.charW, charH: artSize.charH), artCtx)
-  let artPad = if showArt: artSize.charW + 2 else: 1
   var line = 0
   # Title row
   fillBg(ctx.tb, 0, line, w - 1, line, theme.base)
   let title = track.displayName()
-  let titleTrunc = if title.runeLen > w - artPad - 3: truncateAt(title, w - artPad - 2) else: title
-  writeStr(ctx.tb, artPad, line, titleTrunc, theme.text)
+  let titleTrunc = if title.runeLen > w - 4: truncateAt(title, w - 3) else: title
+  writeStr(ctx.tb, 1, line, titleTrunc, theme.text)
   line.inc
   # Artist — Album row
   let artistStr = track.displayArtist()
   let albumStr = track.displayAlbum()
   let artistAlbum = artistStr & "  \u2014  " & albumStr
-  writeStr(ctx.tb, artPad, line, truncateAt(artistAlbum, w - artPad - 2), theme.subtext0)
+  writeStr(ctx.tb, 1, line, truncateAt(artistAlbum, w - 3), theme.subtext0)
   line.inc
   # Codec extension
   let codecExt = splitFile(track.path).ext
   if codecExt.len > 1:
     let codecStr = codecExt[1..^1]
-    writeStr(ctx.tb, artPad, line, codecStr, theme.overlay0)
+    writeStr(ctx.tb, 1, line, codecStr, theme.overlay0)
     line.inc
   # Status row
   let ic = currentIcons()
@@ -328,7 +308,7 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
     if state.status == psPlaying: theme.green
     elif state.status == psPaused: theme.yellow
     else: theme.surface2
-  writeStr(ctx.tb, artPad, line, statusIcon & " " & (
+  writeStr(ctx.tb, 1, line, statusIcon & " " & (
     if state.status == psPlaying: "Playing"
     elif state.status == psPaused: "Paused"
     else: "Stopped"), statusColor)
@@ -338,11 +318,11 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
     let elapsed = formatTime(state.timePos)
     let remaining = formatTime(max(0.0, state.duration - state.timePos))
     let timeStr = elapsed & " / -" & remaining
-    writeStr(ctx.tb, artPad, line, ic.time & " " & timeStr, theme.mauve)
+    writeStr(ctx.tb, 1, line, ic.time & " " & timeStr, theme.mauve)
     let barW = min(w - timeStr.runeLen - 14, 30)
     if barW > 4:
       let progress = min(1.0, state.timePos / state.duration)
-      let barStart = artPad + timeStr.runeLen + 6
+      let barStart = 1 + timeStr.runeLen + 6
       writeStr(ctx.tb, barStart, line, "\u2588".repeat(barW), theme.surface2)
       for i in 0..<barW:
         let frac = float(i) / float(max(barW - 1, 1))
@@ -352,11 +332,11 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
           writeStr(ctx.tb, barStart + i, line, "\u2591", theme.surface2)
     line.inc
   line.inc
-  writeStr(ctx.tb, artPad, line, "\u2500".repeat(min(w - 2, 36)), theme.surface2)
+  writeStr(ctx.tb, 1, line, "\u2500".repeat(min(w - 2, 36)), theme.surface2)
   line.inc
   # Up Next — scrollable
   if w >= 40:
-    writeStr(ctx.tb, artPad, line, "Up Next", theme.sky)
+    writeStr(ctx.tb, 1, line, "Up Next", theme.sky)
     line.inc
     let maxLines = h - line - 1
     let scrollOff = state.upNextScrollOffset.clamp(0, max(0, state.playbackQueue.len - maxLines))
@@ -373,7 +353,7 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
           let upBg = if isCursor: theme.surface2 else: theme.base
           fillBg(ctx.tb, 0, line, w - 1, line, upBg)
           let prefix = if isNowPlaying: "\u25B6 " else: "  "
-          writeStr(ctx.tb, artPad + 2, line, prefix & truncateAt(t.displayName(), w - artPad - 6), if isCursor: theme.yellow elif isNowPlaying: theme.blue else: theme.text)
+          writeStr(ctx.tb, 3, line, prefix & truncateAt(t.displayName(), w - 7), if isCursor: theme.yellow elif isNowPlaying: theme.blue else: theme.text)
           line.inc
       # Scrollbar
       if state.playbackQueue.len > maxLines:
@@ -385,20 +365,8 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
           let sbChar = if isThumb: "\u2588" else: "\u2591"
           writeStr(ctx.tb, w - 1, line + sy - visible, sbChar, if isThumb: theme.surface2 else: theme.surface0)
     else:
-      # Queue empty — show upcoming library tracks
-      if state.playbackQueue.len == 0:
-        let libStart = state.selectIndex + 1
-        var shown = 0
-        for i in libStart..<state.libraryTracks.len:
-          if shown >= maxLines: break
-          if i >= 0 and i < state.libraryTracks.len:
-            let t = state.libraryTracks[i]
-            writeStr(ctx.tb, artPad + 2, line, truncateAt(t.displayName(), w - artPad - 4), theme.text)
-            line.inc
-            shown.inc
-      if visible == 0 or (state.playbackQueue.len == 0 and maxLines > 0):
-        writeStr(ctx.tb, artPad + 2, line, "No tracks queued", theme.subtext0)
-        line.inc
+      writeStr(ctx.tb, 3, line, "No tracks queued", theme.subtext0)
+      line.inc
 
 type
   SidebarEntry = object
@@ -811,10 +779,9 @@ method render*(node: StatusBarComp, ctx: var nw.Context[AppState]) =
   fillBg(ctx.tb, 0, 0, w - 1, 0, theme.mantle)
   var leftX = 1
 
-  let isOverlayActive = state.overlay.kind != okNone or state.helpVisible or state.aboutVisible or state.eqVisible or state.mode == imLeaderMode
-  let displayKey = if isOverlayActive and state.lastCommandName.len > 0: state.lastCommandName
+  let displayKey = if state.lastCommandName.len > 0: state.lastCommandName
                    else: state.lastKeyDisplay
-  let showKey = (state.lastKeyTimer > 0 or isOverlayActive) and displayKey.len > 0
+  let showKey = state.lastKeyTimer > 0 and displayKey.len > 0
   if showKey:
     let keyText = " [" & displayKey & "] "
     writeStrBg(ctx.tb, leftX, 0, keyText, theme.base, theme.surface2)
