@@ -1044,24 +1044,6 @@ proc trySend(client: Socket, data: string): bool =
     return false
   return true
 
-when false:
-  proc cleanupClientState(d: Daemon) =
-    if d.ytSearchActive:
-      try: d.ytSearchProcess.terminate() except: discard
-      close(d.ytSearchProcess)
-    if d.ytStreamActive:
-      try: d.ytStreamProcess.terminate() except: discard
-      close(d.ytStreamProcess)
-    d.ytSearchActive = false
-    d.ytSearchBuf = ""
-    d.ytSearchResults = @[]
-  d.ytStreamActive = false
-  d.ytStreamBuf = ""
-  d.ytStreamResultUrl = ""
-  d.ytStreamPendingTitle = ""
-  d.ytStreamPendingChannel = ""
-  d.ytStreamPendingDuration = ""
-
 proc runDaemon*() =
   let debugMode = "--debug" in os.commandLineParams()
   let dir = stateDir()
@@ -1238,6 +1220,11 @@ proc runDaemon*() =
             continue
           else:
             let old = daemon.clients[ci].buf.len
+            if old + n > 16 * 1024 * 1024:
+              if debugMode: stderr.writeLine("[gtm] client buffer exceeded 16MB, disconnecting")
+              daemon.clients[ci].sock.close()
+              daemon.clients.delete(ci)
+              continue
             daemon.clients[ci].buf.setLen(old + n)
             copyMem(addr daemon.clients[ci].buf[old], addr tmp[0], n)
             while true:
