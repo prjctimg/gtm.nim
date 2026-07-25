@@ -1245,7 +1245,7 @@ proc handleCommandPaletteOverlay(state: var AppState, key: iw.Key, chars: seq[Ru
          fuzzyMatch(state.overlay.query, cmd.description):
         state.overlay.results.add(i)
     state.overlay.cursor = 0
-  elif true:
+  else:
     state.overlay.results = @[]
     for i in 0..<state.commands.len:
       state.overlay.results.add(i)
@@ -1931,13 +1931,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
     state.filterText = ""
     state.filteredIndices = @[]
   of iw.Key.V:
-    if state.selectMode:
-      state.selectMode = false
-      state.selectedIndices = initHashSet[int]()
-    else:
-      state.selectMode = true
-      state.selectedIndices = initHashSet[int]()
-      state.selectionAnchor = state.selectIndex
+    state.toggleSelect()
   of iw.Key.QuestionMark: state.helpVisible = true; state.lastCommandName = "Show Help"
   of iw.Key.One: state.tab = tabNowPlaying; state.rebuildItems()
   of iw.Key.Two: state.tab = tabLibrary; state.rebuildItems()
@@ -1984,32 +1978,6 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
           if state.overlay.kind == okNone and not state.helpVisible and not state.aboutVisible and not state.eqVisible and state.mode != imLeaderMode:
             state.lastCommandName = state.commands[idx].name
           state.commands[idx].handler(state)
-
-when false:
-  proc getNextTrackInfo(state: var AppState): tuple[path: string, id: int64] =
-    let items = state.displayItems
-    if state.playbackQueue.len > 0:
-      let tIdx = state.playbackQueue[0]
-      if tIdx >= 0 and tIdx < state.libraryTracks.len:
-        return (state.libraryTracks[tIdx].path, state.libraryTracks[tIdx].id)
-      return ("", 0)
-    if items.len == 0: return ("", 0)
-    var idx: int
-  if state.shuffleEnabled and state.shuffleOrder.len > 0:
-    let si = (state.shuffleIndex + 1) mod state.shuffleOrder.len
-    idx = state.shuffleOrder[si]
-  elif state.repeatMode == 2:
-    idx = state.selectIndex
-  else:
-    idx = state.selectIndex + 1
-    if idx >= items.len:
-      if state.repeatMode != 1:
-        return ("", 0)
-      idx = 0
-  if idx >= 0 and idx < items.len:
-    let track = state.libraryTracks[items[idx].trackIdx]
-    return (track.path, track.id)
-  return ("", 0)
 
 proc parseDurationToSec*(dur: string): float =
   let parts = dur.split(':')

@@ -165,7 +165,12 @@ proc sendDaemonCmd*(cli: DaemonClient, cmd: JsonNode): JsonNode =
       if sel > 0:
         let n = posix.recv(cli.sock.getFd, addr tmp[0], tmp.len, 0.cint)
         if n > 0:
-          let old = cli.buf.len; cli.buf.setLen(old + n); copyMem(addr cli.buf[old], addr tmp[0], n)
+          let old = cli.buf.len
+          if old + n > 16 * 1024 * 1024:
+            cli.connected = false
+            cli.clearPending()
+            return %*{"ok": false, "error": "buffer exceeded"}
+          cli.buf.setLen(old + n); copyMem(addr cli.buf[old], addr tmp[0], n)
         elif n == 0:
           cli.connected = false
           cli.clearPending()
