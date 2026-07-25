@@ -1,5 +1,7 @@
 import os, json, strutils, net, posix, random, osproc, times, tables
 from nativesockets import setBlocking, selectRead, SocketHandle
+import msgpack4nim
+import msgpack4nim/msgpack2json
 proc prctl(option: cint, arg2: cstring): cint {.importc, header: "<sys/prctl.h>".}
 import audio, state, library, ytdlp
 
@@ -38,7 +40,8 @@ type
     dckYtSetConfig, dckYtGetSearchHistory, dckYtClearSearchHistory,
     dckListEqPresets,
     dckSetCrossfadeCurve,
-    dckPing
+    dckPing,
+    dckHandshake
 
   DaemonCmd* = object
     kind*: DaemonCmdKind
@@ -52,6 +55,9 @@ type
   ClientState* = object
     sock*: Socket
     buf*: string
+    authenticated*: bool
+    id*: uint64
+    framesSinceConnect*: int
 
   Daemon* = ref object
     player: AudioBackend
@@ -70,6 +76,9 @@ type
     sleepTimerRemaining*: int
     sleepTimerFrames*: int
     persistFrames: int
+    heartbeatFrames: int
+    pulseServer: Socket
+    pulseClients: seq[Socket]
     playbackQueue*: seq[string]
     shuffleOrder*: seq[int]
     shuffleIndex*: int
@@ -251,41 +260,82 @@ proc parseDaemonCommand(line: string): DaemonCmd =
       result.kind = dckListEqPresets
     of "ping":
       result.kind = dckPing
+    of "handshake":
+      result.kind = dckHandshake
     else: result.kind = dckStatus
   except CatchableError:
     result.kind = dckStatus
 
-proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): JsonNode =
-  result = newJArray()
+proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): seq[string] =
+  result = @[]
   for ev in events:
-    var obj = %*{"kind": %ev.kind.int}
+    var obj = %*{"event": %eventName(ev.kind)}
     case ev.kind
     of aekPositionChanged: obj["time_pos"] = %ev.floatVal
     of aekDurationChanged: obj["duration"] = %ev.floatVal
     of aekVolumeChanged: obj["volume"] = %ev.intVal
     of aekPlaybackStarted:
-      obj["state"] = %"playing"
       if d != nil:
-        obj["track_path"] = %d.currentTrackPath
-        obj["track_title"] = %d.currentTrackTitle
-        obj["track_channel"] = %d.currentTrackChannel
+        obj["track"] = %*{
+          "id": %d.currentTrackPath,
+          "title": %d.currentTrackTitle,
+          "artist": %d.currentTrackChannel,
+          "path": %d.currentTrackPath,
+          "duration": %d.player.duration,
+          "cover_art": "",
+          "favourite": false
+        }
         obj["auto_advanced"] = %d.autoAdvancing
-    of aekPlaybackPaused: obj["state"] = %"paused"
-    of aekPlaybackStopped: obj["state"] = %"stopped"
-    of aekTrackEnded: obj["reason"] = %"eof"
+        obj["time_pos"] = %d.player.timePos
+        obj["duration"] = %d.player.duration
+    of aekPlaybackPaused:
+      if d != nil: obj["time_pos"] = %d.player.timePos
+    of aekPlaybackStopped: discard
+    of aekTrackEnded: discard
     of aekMetadataChanged:
-      if ev.strVal.len > 0: obj["event"] = %ev.strVal
+      if ev.strVal.len > 0: obj["name"] = %ev.strVal
     else: discard
-    result.add(obj)
+    result.add($obj)
 
 proc broadcastAll(d: Daemon, data: string) =
   var alive: seq[ClientState]
   for c in d.clients:
-    if trySend(c.sock, data):
-      alive.add(c)
+    if c.authenticated:
+      if trySend(c.sock, data):
+        alive.add(c)
+      else:
+        try: c.sock.close() except: discard
     else:
-      try: c.sock.close() except: discard
+      alive.add(c)
   d.clients = alive
+
+proc broadcastAllLines(d: Daemon, lines: seq[string]) =
+  for line in lines:
+    d.broadcastAll(line & "\n")
+
+proc broadcastPulse(d: Daemon, evJson: JsonNode) =
+  if d.pulseClients.len == 0: return
+  let payload = fromJsonNode(evJson)
+  var lenBuf: array[4, byte]
+  let plen = payload.len
+  lenBuf[0] = byte((plen shr 24) and 0xFF)
+  lenBuf[1] = byte((plen shr 16) and 0xFF)
+  lenBuf[2] = byte((plen shr 8) and 0xFF)
+  lenBuf[3] = byte(plen and 0xFF)
+  var frame = newString(4 + plen)
+  copyMem(addr frame[0], addr lenBuf[0], 4)
+  copyMem(addr frame[4], unsafeAddr payload[0], plen)
+  var alive: seq[Socket]
+  for pc in d.pulseClients:
+    if trySend(pc, frame):
+      alive.add(pc)
+    else:
+      try: pc.close() except: discard
+  d.pulseClients = alive
+
+proc broadcastEvent(d: Daemon, evJson: JsonNode) =
+  d.broadcastAll($evJson & "\n")
+  d.broadcastPulse(evJson)
 
 proc sendQueueEvent(d: Daemon) =
   if d.clients.len == 0: return
@@ -293,9 +343,9 @@ proc sendQueueEvent(d: Daemon) =
   for p in d.playbackQueue: qArr.add(%p)
   var soArr = newJArray()
   for i in d.shuffleOrder: soArr.add(%i)
-  let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "queue_changed",
-    "queue": qArr, "shuffleOrder": soArr, "shuffleIndex": %d.shuffleIndex}]}
-  d.broadcastAll($ev & "\n")
+  let ev = %*{"event": "queue_changed",
+    "queue": qArr, "shuffleOrder": soArr, "shuffleIndex": %d.shuffleIndex}
+  d.broadcastEvent(ev)
 
 proc savePlaybackState(d: Daemon) =
   if d.lib != nil:
@@ -1019,6 +1069,10 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
     result["presets"] = %["Flat", "Rock", "Pop", "Classical", "Jazz", "HipHop", "Vocal", "BassBoost", "Headphones", "Laptop"]
   of dckPing:
     result["pong"] = %true
+  of dckHandshake:
+    result["version"] = %1
+    result["daemon"] = %"gtmd-nim"
+    result["daemon_version"] = %"0.1.0"
 
 
 proc trySend(client: Socket, data: string): bool =
@@ -1086,6 +1140,7 @@ proc runDaemon*() =
     sleepTimerRemaining: 0,
     sleepTimerFrames: 0,
     persistFrames: 0,
+    heartbeatFrames: 0,
     playbackQueue: @[],
     trackHistory: @[],
     shuffleOrder: @[],
@@ -1111,7 +1166,8 @@ proc runDaemon*() =
     ytLastCompletedUrl: "",
     ytPlaylistActive: false,
     ytPlaylistBuf: "",
-    ytPlaylistUrl: ""
+    ytPlaylistUrl: "",
+    pulseClients: @[]
   )
   when defined(useMpris):
     initMpris(daemon)
@@ -1179,12 +1235,21 @@ proc runDaemon*() =
   daemon.server = newSocket(srvFd, Domain.AF_UNIX, SockType.SOCK_STREAM)
   daemon.server.bindUnix(sockPath())
   daemon.server.listen()
+  # Pulse socket for binary MessagePack events
+  removeFile(pulseSockPath())
+  let pulseFd = posix.socket(posix.AF_UNIX, posix.SOCK_STREAM, 0)
+  daemon.pulseServer = newSocket(pulseFd, Domain.AF_UNIX, SockType.SOCK_STREAM)
+  daemon.pulseServer.bindUnix(pulseSockPath())
+  daemon.pulseServer.listen()
+  daemon.pulseServer.getFd().setBlocking(false)
   while daemon.running:
     when defined(useMpris):
       pollMpris()
-    var readFds: seq[SocketHandle] = @[daemon.server.getFd]
+    var readFds: seq[SocketHandle] = @[daemon.server.getFd, daemon.pulseServer.getFd]
     for c in daemon.clients:
       readFds.add(c.sock.getFd)
+    for pc in daemon.pulseClients:
+      readFds.add(pc.getFd)
     if selectRead(readFds, 16) > 0:
       if daemon.server.getFd in readFds:
         var clientAddr: posix.Sockaddr_un
@@ -1194,11 +1259,20 @@ proc runDaemon*() =
         if cliFd.int >= 0:
           var newClient = ClientState(
             sock: newSocket(cliFd, Domain.AF_UNIX, SockType.SOCK_STREAM),
-            buf: ""
+            buf: "", authenticated: false, framesSinceConnect: 0
           )
           setBlocking(newClient.sock.getFd, false)
           daemon.clients.add(newClient)
           daemon.idleFrames = 0
+      if daemon.pulseServer.getFd in readFds:
+        var pulseAddr: posix.Sockaddr_un
+        var pulseAddrLen = posix.SockLen(sizeof(pulseAddr))
+        let pcFd = posix.accept(daemon.pulseServer.getFd,
+          cast[ptr posix.SockAddr](addr(pulseAddr)), addr(pulseAddrLen))
+        if pcFd.int >= 0:
+          var pcSock = newSocket(pcFd, Domain.AF_UNIX, SockType.SOCK_STREAM)
+          setBlocking(pcSock.getFd, false)
+          daemon.pulseClients.add(pcSock)
       # Read from all clients
       var ci = 0
       while ci < daemon.clients.len:
@@ -1236,25 +1310,58 @@ proc runDaemon*() =
                 if debugMode: stderr.writeLine("[gtm] daemon recv: " & line)
                 let cmdJson = parseJson(line)
                 let cmd = parseDaemonCommand(line)
-                let resp = try:
-                  executeCommand(daemon, cmd)
-                except Exception as ex:
-                  if debugMode: stderr.writeLine("[gtm] command error: " & ex.msg)
-                  %*{"ok": false, "error": ex.msg}
-                if cmdJson.hasKey("seq"):
-                  resp["seq"] = cmdJson["seq"]
-                let respStr = $resp & "\n"
-                if debugMode: stderr.writeLine("[gtm] daemon resp: " & respStr.strip())
-                if not trySend(daemon.clients[ci].sock, respStr):
-                  daemon.clients[ci].sock.close()
-                  daemon.clients.delete(ci)
-                  break
+                # Auth gate: require handshake first
+                if not daemon.clients[ci].authenticated and cmd.kind != dckHandshake:
+                  var rejResp = %*{"ok": false, "error": "handshake required"}
+                  if cmdJson.hasKey("id"): rejResp["id"] = cmdJson["id"]
+                  let rejStr = $rejResp & "\n"
+                  if debugMode: stderr.writeLine("[gtm] daemon resp: " & rejStr.strip())
+                  if not trySend(daemon.clients[ci].sock, rejStr):
+                    daemon.clients[ci].sock.close()
+                    daemon.clients.delete(ci)
+                    break
+                else:
+                  let resp = try:
+                    executeCommand(daemon, cmd)
+                  except Exception as ex:
+                    if debugMode: stderr.writeLine("[gtm] command error: " & ex.msg)
+                    %*{"ok": false, "error": ex.msg}
+                  if cmdJson.hasKey("id"):
+                    resp["id"] = cmdJson["id"]
+                  if cmd.kind == dckHandshake:
+                    daemon.clients[ci].authenticated = true
+                    daemon.clients[ci].framesSinceConnect = 0
+                  let respStr = $resp & "\n"
+                  if debugMode: stderr.writeLine("[gtm] daemon resp: " & respStr.strip())
+                  if not trySend(daemon.clients[ci].sock, respStr):
+                    daemon.clients[ci].sock.close()
+                    daemon.clients.delete(ci)
+                    break
                 if not daemon.running: break
+        # Handshake timeout: disconnect unauthed clients after 600 frames (~10s)
+        if ci < daemon.clients.len and not daemon.clients[ci].authenticated:
+          daemon.clients[ci].framesSinceConnect.inc
+          if daemon.clients[ci].framesSinceConnect > 600:
+            if debugMode: stderr.writeLine("[gtm] handshake timeout, disconnecting client")
+            daemon.clients[ci].sock.close()
+            daemon.clients.delete(ci)
+            continue
         ci.inc
+      # Drain pulse client disconnections
+      var pci = 0
+      while pci < daemon.pulseClients.len:
+        if daemon.pulseClients[pci].getFd in readFds:
+          var tmp: array[256, char]
+          let n = posix.recv(daemon.pulseClients[pci].getFd, addr tmp[0], tmp.len.cint, 0)
+          if n <= 0:
+            try: daemon.pulseClients[pci].close() except: discard
+            daemon.pulseClients.delete(pci)
+            continue
+        pci.inc
     let daemonEvents = daemon.player.pollEvents()
     if daemonEvents.len > 0 and daemon.clients.len > 0:
-      let evJson = %*{"events": serializeEvents(daemonEvents, daemon)}
-      daemon.broadcastAll($evJson & "\n")
+      let evLines = serializeEvents(daemonEvents, daemon)
+      daemon.broadcastAllLines(evLines)
     # Auto-advance on track ended
     for ev in daemonEvents:
       if ev.kind == aekTrackEnded:
@@ -1312,8 +1419,8 @@ proc runDaemon*() =
               if existingId == 0:
                 discard daemon.lib.addTrack(path, daemon.ytDownloadTasks[i].title,
                   daemon.ytDownloadTasks[i].channel, "", 0.0, 0, 0, "")
-            let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "yt_download_done", "url": %dlUrl, "path": %path, "title": %daemon.ytDownloadTasks[i].title}]}
-            daemon.broadcastAll($ev & "\n")
+            let ev = %*{"event": "custom", "name": "yt_download_done", "url": %dlUrl, "path": %path, "title": %daemon.ytDownloadTasks[i].title}
+            daemon.broadcastEvent(ev)
       else:
         dlDone.add(i)
     for i in countdown(dlDone.len - 1, 0):
@@ -1338,8 +1445,8 @@ proc runDaemon*() =
         var arr = newJArray()
         for r in daemon.ytSearchResults:
           arr.add(%*{"title": %r.title, "url": %r.url, "duration": %r.duration, "channel": %r.channel, "kind": %r.kind.int})
-        let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "yt_search_partial", "results": arr}]}
-        daemon.broadcastAll($ev & "\n")
+        let ev = %*{"event": "custom", "name": "yt_search_partial", "results": arr}
+        daemon.broadcastEvent(ev)
       if not daemon.ytSearchProcess.running():
         let finalResults = finishYoutubeSearch(daemon.ytSearchProcess, daemon.ytSearchBuf)
         for r in finalResults:
@@ -1349,8 +1456,8 @@ proc runDaemon*() =
         var arr = newJArray()
         for r in daemon.ytSearchResults:
           arr.add(%*{"title": %r.title, "url": %r.url, "duration": %r.duration, "channel": %r.channel, "kind": %r.kind.int})
-        let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "yt_search_done", "results": arr}]}
-        daemon.broadcastAll($ev & "\n")
+        let ev = %*{"event": "custom", "name": "yt_search_done", "results": arr}
+        daemon.broadcastEvent(ev)
 
     # Auto-poll yt-dlp playlist fetch results & broadcast via events
     if daemon.ytPlaylistActive:
@@ -1373,9 +1480,9 @@ proc runDaemon*() =
         var tracksArr = newJArray()
         for t in daemon.ytPlaylistResult.tracks:
           tracksArr.add(%*{"title": %t.title, "url": %t.url, "duration": %t.duration, "channel": %t.channel, "kind": %t.kind.int})
-        let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "yt_playlist_fetched",
-          "title": %daemon.ytPlaylistResult.title, "tracks": tracksArr}]}
-        daemon.broadcastAll($ev & "\n")
+        let ev = %*{"event": "custom", "name": "yt_playlist_fetched",
+          "title": %daemon.ytPlaylistResult.title, "tracks": tracksArr}
+        daemon.broadcastEvent(ev)
 
     # Auto-poll explicit stream URL resolution (for user-initiated "Play" on search result)
     if daemon.ytStreamActive:
@@ -1383,11 +1490,11 @@ proc runDaemon*() =
         daemon.ytStreamResultUrl = pollStreamUrlFetch(daemon.ytStreamProcess, daemon.ytStreamBuf)
         daemon.ytStreamActive = false
         daemon.ytStreamBuf = ""
-        let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "yt_stream_resolved",
+        let ev = %*{"event": "custom", "name": "yt_stream_resolved",
           "url": %daemon.ytStreamResultUrl,
           "title": %daemon.ytStreamPendingTitle,
-          "channel": %daemon.ytStreamPendingChannel}]}
-        daemon.broadcastAll($ev & "\n")
+          "channel": %daemon.ytStreamPendingChannel}
+        daemon.broadcastEvent(ev)
 
     # Retry advancing if player stopped with items pending (e.g. waiting for YT download)
     if daemon.player.state == 0 and daemon.playbackQueue.len > 0:
@@ -1416,9 +1523,9 @@ proc runDaemon*() =
           if isYtWatchUrl(nextQueuedPath) and nextQueuedPath in daemon.ytDownloadedMeta:
             nextTitle = daemon.ytDownloadedMeta[nextQueuedPath].title
             nextChannel = daemon.ytDownloadedMeta[nextQueuedPath].channel
-          let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "up_next",
-            "next_path": %nextQueuedPath, "next_title": %nextTitle, "next_channel": %nextChannel}]}
-          daemon.broadcastAll($ev & "\n")
+          let ev = %*{"event": "custom", "name": "up_next",
+            "next_path": %nextQueuedPath, "next_title": %nextTitle, "next_channel": %nextChannel}
+          daemon.broadcastEvent(ev)
 
     # Crossfade scheduling
     if daemon.player.state == 1 and daemon.crossfadeDuration > 0:
@@ -1458,8 +1565,8 @@ proc runDaemon*() =
         daemon.scanningDir = ""
         daemon.scanningFiles = @[]
         daemon.scanningIdx = 0
-        let ev = %*{"events": [%*{"kind": %aekCustomEvent.int, "event": "scan_done"}]}
-        daemon.broadcastAll($ev & "\n")
+        let ev = %*{"event": "custom", "name": "scan_done"}
+        daemon.broadcastEvent(ev)
 
     if daemon.sleepTimerRemaining > 0:
       daemon.sleepTimerFrames.inc
@@ -1479,6 +1586,11 @@ proc runDaemon*() =
     if daemon.persistFrames >= 1800:
       daemon.persistFrames = 0
       daemon.savePlaybackState()
+    daemon.heartbeatFrames.inc
+    if daemon.heartbeatFrames >= 1800:
+      daemon.heartbeatFrames = 0
+      let ev = %*{"event": "heartbeat"}
+      daemon.broadcastEvent(ev)
     daemon.idleFrames.inc
     if daemon.idleFrames > daemon.idleTimeout * 60 and daemon.player.state == 0:
       daemon.savePlaybackState()
@@ -1490,6 +1602,10 @@ proc runDaemon*() =
       break
   for c in daemon.clients:
     try: c.sock.close() except: discard
+  for pc in daemon.pulseClients:
+    try: pc.close() except: discard
   daemon.server.close()
+  daemon.pulseServer.close()
   removeFile(sockPath())
+  removeFile(pulseSockPath())
   removePidFile()

@@ -1,10 +1,11 @@
 import os, json, strutils, net, osproc, posix, tables
+from times import epochTime
 from nativesockets import setBlocking
 import state, audio
 
 type
   PendingRequest* = object
-    seqNo: int
+    idNo: int
     callback: proc(resp: JsonNode) {.closure.}
 
   DaemonClient* = ref object of AudioBackend
@@ -15,9 +16,10 @@ type
     lastTrackId*: int64
     drainedEvents: seq[AudioEvent]
     ipcTimeoutSec*: float
-    pingMissed*: int
-    reconnectCooldown*: int
-    nextSeq: int
+    nextRetryAt*: float
+    retryDelayMs*: int
+    lastDataAt*: float
+    nextId: int
     pending: seq[PendingRequest]
 
 proc daemonIsRunning*(): bool =
@@ -67,20 +69,32 @@ proc connectToDaemon*(cli: DaemonClient): bool =
     cli.sock = nil
     return false
 
+proc handshake*(cli: DaemonClient): bool
+
 proc ensureDaemon*(cli: DaemonClient) =
   if cli == nil: return
   if cli.connected: return
-  if cli.reconnectCooldown > 0:
-    cli.reconnectCooldown.dec
-    return
+  let now = epochTime()
+  if now < cli.nextRetryAt: return
   if daemonIsRunning():
     if connectToDaemon(cli):
-      cli.reconnectCooldown = 0
+      if cli.handshake():
+        cli.retryDelayMs = 500
+        cli.nextRetryAt = 0.0
+        cli.lastDataAt = epochTime()
+      else:
+        try: cli.sock.close() except: discard
+        cli.sock = nil
+        cli.connected = false
+        cli.nextRetryAt = now + cli.retryDelayMs.float / 1000.0
+        cli.retryDelayMs = min(cli.retryDelayMs * 2, 10000)
     else:
-      cli.reconnectCooldown = 10
+      cli.nextRetryAt = now + cli.retryDelayMs.float / 1000.0
+      cli.retryDelayMs = min(cli.retryDelayMs * 2, 10000)
   else:
     startDaemonProcess()
-    cli.reconnectCooldown = 10
+    cli.nextRetryAt = now + cli.retryDelayMs.float / 1000.0
+    cli.retryDelayMs = min(cli.retryDelayMs * 2, 10000)
 
 proc drainEventLines(cli: DaemonClient, buf: var string) =
   cli.drainedEvents = @[]
@@ -92,50 +106,54 @@ proc drainEventLines(cli: DaemonClient, buf: var string) =
     if line.len == 0: continue
     try:
       let j = parseJson(line)
-      if not j.hasKey("events"):
+      if not j.hasKey("event"):
         buf = line & "\n" & buf
         break
-      for evJson in j["events"]:
-        var ev = AudioEvent()
-        let k = evJson{"kind"}.getInt(0)
-        ev.kind = AudioEventKind(k)
-        case ev.kind
-        of aekPositionChanged: ev.floatVal = evJson{"time_pos"}.getFloat(0.0)
-        of aekDurationChanged: ev.floatVal = evJson{"duration"}.getFloat(0.0)
-        of aekVolumeChanged: ev.intVal = evJson{"volume"}.getInt(0)
-        of aekPlaybackStarted:
-          if evJson.hasKey("track_path"):
-            ev.metadata["track_path"] = evJson{"track_path"}.getStr("")
-            ev.metadata["track_title"] = evJson{"track_title"}.getStr("")
-            ev.metadata["track_channel"] = evJson{"track_channel"}.getStr("")
-          ev.metadata["auto_advanced"] = $(evJson{"auto_advanced"}.getBool(false))
-        of aekMetadataChanged: ev.strVal = evJson{"event"}.getStr("")
-        of aekCustomEvent:
-          ev.strVal = evJson{"event"}.getStr("")
-          if evJson.hasKey("shuffleIndex"):
-            ev.intVal = evJson["shuffleIndex"].getInt(0)
-          if evJson.hasKey("url"):
-            ev.metadata["url"] = evJson["url"].getStr("")
-          if evJson.hasKey("path"):
-            ev.metadata["path"] = evJson["path"].getStr("")
-          if evJson.hasKey("title"):
-            ev.metadata["title"] = evJson["title"].getStr("")
-          if evJson.hasKey("channel"):
-            ev.metadata["channel"] = evJson["channel"].getStr("")
-          if evJson.hasKey("next_path"):
-            ev.metadata["next_path"] = evJson["next_path"].getStr("")
-          if evJson.hasKey("next_title"):
-            ev.metadata["next_title"] = evJson["next_title"].getStr("")
-          if evJson.hasKey("next_channel"):
-            ev.metadata["next_channel"] = evJson["next_channel"].getStr("")
-          if evJson.hasKey("queue"):
-            ev.metadata["queue"] = $evJson["queue"]
-          if evJson.hasKey("results"):
-            ev.metadata["results"] = $evJson["results"]
-          if evJson.hasKey("tracks"):
-            ev.metadata["tracks"] = $evJson["tracks"]
-        else: discard
-        cli.drainedEvents.add(ev)
+      let evName = j["event"].getStr("")
+      var ev = AudioEvent()
+      ev.kind = parseEventName(evName)
+      case ev.kind
+      of aekPositionChanged: ev.floatVal = j{"time_pos"}.getFloat(0.0)
+      of aekDurationChanged: ev.floatVal = j{"duration"}.getFloat(0.0)
+      of aekVolumeChanged: ev.intVal = j{"volume"}.getInt(0)
+      of aekPlaybackStarted:
+        let track = j{"track"}
+        if track != nil and track.kind == JObject:
+          ev.metadata["track_path"] = track{"path"}.getStr("")
+          ev.metadata["track_title"] = track{"title"}.getStr("")
+          ev.metadata["track_channel"] = track{"artist"}.getStr("")
+        ev.metadata["auto_advanced"] = $(j{"auto_advanced"}.getBool(false))
+      of aekPlaybackPaused: discard
+      of aekPlaybackStopped: discard
+      of aekTrackEnded: discard
+      of aekMetadataChanged:
+        ev.strVal = j{"name"}.getStr("")
+      of aekCustomEvent:
+        ev.strVal = j{"name"}.getStr("")
+        if j.hasKey("shuffleIndex"):
+          ev.intVal = j["shuffleIndex"].getInt(0)
+        if j.hasKey("url"):
+          ev.metadata["url"] = j["url"].getStr("")
+        if j.hasKey("path"):
+          ev.metadata["path"] = j["path"].getStr("")
+        if j.hasKey("title"):
+          ev.metadata["title"] = j["title"].getStr("")
+        if j.hasKey("channel"):
+          ev.metadata["channel"] = j["channel"].getStr("")
+        if j.hasKey("next_path"):
+          ev.metadata["next_path"] = j["next_path"].getStr("")
+        if j.hasKey("next_title"):
+          ev.metadata["next_title"] = j["next_title"].getStr("")
+        if j.hasKey("next_channel"):
+          ev.metadata["next_channel"] = j["next_channel"].getStr("")
+        if j.hasKey("queue"):
+          ev.metadata["queue"] = $j["queue"]
+        if j.hasKey("results"):
+          ev.metadata["results"] = $j["results"]
+        if j.hasKey("tracks"):
+          ev.metadata["tracks"] = $j["tracks"]
+      else: discard
+      cli.drainedEvents.add(ev)
     except:
       buf = line & "\n" & buf
       break
@@ -146,9 +164,9 @@ proc sendDaemonCmd*(cli: DaemonClient, cmd: JsonNode): JsonNode =
   if cli == nil or cli.sock == nil or not cli.connected: return %*{"ok": false, "error": "not connected"}
   try:
     drainEventLines(cli, cli.buf)
-    let seqNo = cli.nextSeq
-    cli.nextSeq.inc
-    cmd["seq"] = %seqNo
+    let idNo = cli.nextId
+    cli.nextId.inc
+    cmd["id"] = %idNo
     let data = $cmd & "\n"
     cli.sock.send(data)
     var tmp: array[16384, char]
@@ -182,22 +200,27 @@ proc sendDaemonCmd*(cli: DaemonClient, cmd: JsonNode): JsonNode =
         cli.buf = cli.buf[nli+1..^1]
         if line.len == 0: continue
         let j = parseJson(line)
-        if j.hasKey("seq") and j["seq"].getInt(-1) == seqNo:
+        if j.hasKey("id") and j["id"].getInt(-1) == idNo:
           return j
-        if j.hasKey("events"): continue
-        if j.hasKey("state"): continue
+        if j.hasKey("event"): continue
       totalWait += 0.1
   except:
     cli.connected = false
     cli.clearPending()
   return %*{"ok": false, "error": "no response"}
 
+proc handshake*(cli: DaemonClient): bool =
+  if cli == nil or cli.sock == nil or not cli.connected: return false
+  let cmd = %*{"cmd": "handshake", "version": 1, "client": "gtm"}
+  let resp = sendDaemonCmd(cli, cmd)
+  result = resp.hasKey("ok") and resp["ok"].getBool(false)
+
 proc sendOnly*(cli: DaemonClient, cmd: JsonNode) =
   if cli == nil or cli.sock == nil or not cli.connected: return
   try:
     drainEventLines(cli, cli.buf)
-    cmd["seq"] = %cli.nextSeq
-    cli.nextSeq.inc
+    cmd["id"] = %cli.nextId
+    cli.nextId.inc
     let data = $cmd & "\n"
     cli.sock.send(data)
   except:
@@ -211,10 +234,10 @@ proc sendAsync*(cli: DaemonClient, cmd: JsonNode, callback: proc(resp: JsonNode)
   if cli == nil or cli.sock == nil or not cli.connected: return
   try:
     drainEventLines(cli, cli.buf)
-    let seqNo = cli.nextSeq
-    cli.nextSeq.inc
-    cmd["seq"] = %seqNo
-    cli.pending.add(PendingRequest(seqNo: seqNo, callback: callback))
+    let idNo = cli.nextId
+    cli.nextId.inc
+    cmd["id"] = %idNo
+    cli.pending.add(PendingRequest(idNo: idNo, callback: callback))
     let data = $cmd & "\n"
     cli.sock.send(data)
   except:
@@ -300,6 +323,7 @@ method pollEvents*(cli: DaemonClient): seq[AudioEvent] =
     if sel > 0:
       let n = posix.recv(cli.sock.getFd, addr tmp[0], tmp.len, 0.cint)
       if n > 0:
+        cli.lastDataAt = epochTime()
         let old = cli.buf.len; cli.buf.setLen(old + n); copyMem(addr cli.buf[old], addr tmp[0], n)
     while true:
       let nli = cli.buf.find('\n')
@@ -308,59 +332,47 @@ method pollEvents*(cli: DaemonClient): seq[AudioEvent] =
       cli.buf = cli.buf[nli+1..^1]
       if line.len == 0: continue
       let json = parseJson(line)
-      if json.hasKey("events"):
-        for evJson in json["events"]:
-          var ev = AudioEvent()
-          let k = evJson{"kind"}.getInt(0)
-          ev.kind = AudioEventKind(k)
-          case ev.kind
-          of aekPositionChanged:
-            ev.floatVal = evJson{"time_pos"}.getFloat(0.0)
-            cli.timePos = ev.floatVal
-          of aekDurationChanged: ev.floatVal = evJson{"duration"}.getFloat(0.0)
-          of aekVolumeChanged: ev.intVal = evJson{"volume"}.getInt(0)
-          of aekPlaybackStarted:
-            if evJson.hasKey("track_path"):
-              ev.metadata["track_path"] = evJson{"track_path"}.getStr("")
-              ev.metadata["track_title"] = evJson{"track_title"}.getStr("")
-              ev.metadata["track_channel"] = evJson{"track_channel"}.getStr("")
-          of aekMetadataChanged: ev.strVal = evJson{"event"}.getStr("")
-          of aekCustomEvent:
-            ev.strVal = evJson{"event"}.getStr("")
-            if evJson.hasKey("shuffleIndex"):
-              ev.intVal = evJson["shuffleIndex"].getInt(0)
-            if evJson.hasKey("url"):
-              ev.metadata["url"] = evJson["url"].getStr("")
-            if evJson.hasKey("path"):
-              ev.metadata["path"] = evJson["path"].getStr("")
-            if evJson.hasKey("title"):
-              ev.metadata["title"] = evJson["title"].getStr("")
-            if evJson.hasKey("channel"):
-              ev.metadata["channel"] = evJson["channel"].getStr("")
-            if evJson.hasKey("results"):
-              ev.metadata["results"] = $evJson["results"]
-            if evJson.hasKey("tracks"):
-              ev.metadata["tracks"] = $evJson["tracks"]
-          else: discard
-          result.add(ev)
-      elif json.hasKey("state"):
-        let s = json["state"].getStr()
-        cli.state = (if s == "playing": 1 elif s == "paused": 2 else: 0)
-        if json.hasKey("time_pos"):
-          cli.timePos = json["time_pos"].getFloat(0.0)
-        if json.hasKey("duration"):
-          cli.duration = json["duration"].getFloat(0.0)
-        if json.hasKey("volume"):
-          cli.volume = json["volume"].getInt(80)
-        if json.hasKey("audio_working"):
-          cli.working = json["audio_working"].getBool(true)
-        if json.hasKey("sleep_timer"):
-          cli.sleepTimerRemaining = json["sleep_timer"].getInt(0)
-      elif json.hasKey("seq"):
-        let seqNo = json["seq"].getInt(-1)
+      if json.hasKey("event"):
+        let evName = json["event"].getStr("")
+        var ev = AudioEvent()
+        ev.kind = parseEventName(evName)
+        case ev.kind
+        of aekPositionChanged:
+          ev.floatVal = json{"time_pos"}.getFloat(0.0)
+          cli.timePos = ev.floatVal
+        of aekDurationChanged: ev.floatVal = json{"duration"}.getFloat(0.0)
+        of aekVolumeChanged: ev.intVal = json{"volume"}.getInt(0)
+        of aekPlaybackStarted:
+          let track = json{"track"}
+          if track != nil and track.kind == JObject:
+            ev.metadata["track_path"] = track{"path"}.getStr("")
+            ev.metadata["track_title"] = track{"title"}.getStr("")
+            ev.metadata["track_channel"] = track{"artist"}.getStr("")
+          ev.floatVal = json{"time_pos"}.getFloat(0.0)
+        of aekMetadataChanged: ev.strVal = json{"name"}.getStr("")
+        of aekCustomEvent:
+          ev.strVal = json{"name"}.getStr("")
+          if json.hasKey("shuffleIndex"):
+            ev.intVal = json["shuffleIndex"].getInt(0)
+          if json.hasKey("url"):
+            ev.metadata["url"] = json["url"].getStr("")
+          if json.hasKey("path"):
+            ev.metadata["path"] = json["path"].getStr("")
+          if json.hasKey("title"):
+            ev.metadata["title"] = json["title"].getStr("")
+          if json.hasKey("channel"):
+            ev.metadata["channel"] = json["channel"].getStr("")
+          if json.hasKey("results"):
+            ev.metadata["results"] = $json["results"]
+          if json.hasKey("tracks"):
+            ev.metadata["tracks"] = $json["tracks"]
+        else: discard
+        result.add(ev)
+      elif json.hasKey("id"):
+        let idNo = json["id"].getInt(-1)
         var i = 0
         while i < cli.pending.len:
-          if cli.pending[i].seqNo == seqNo:
+          if cli.pending[i].idNo == idNo:
             let cb = cli.pending[i].callback
             cli.pending.delete(i)
             cb(json)
@@ -571,6 +583,6 @@ proc newDaemonClient*(): DaemonClient =
     volume: 80, state: 0, running: false,
     connected: false, buf: "", backendType: abtDaemon,
     working: true, sleepTimerRemaining: 0,
-    ipcTimeoutSec: 3.0, pingMissed: 0, reconnectCooldown: 0,
-    nextSeq: 0, pending: @[]
+    ipcTimeoutSec: 3.0, nextRetryAt: 0.0, retryDelayMs: 500,
+    lastDataAt: 0.0, nextId: 0, pending: @[]
   )

@@ -36,6 +36,7 @@ switch("define", "gtmVersion:" & gitVersion())
 switch("path", findDepPath("nimwave"))
 switch("path", findDepPath("illwave"))
 switch("path", findDepPath("ansiutils"))
+switch("path", projectDir / "vendor" / "msgpack4nim" / "src")
 
 when defined(useSqlite):
   switch("passC", "-I" & projectDir / "vendor/sqlite")

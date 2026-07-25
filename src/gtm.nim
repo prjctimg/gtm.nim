@@ -1131,7 +1131,7 @@ proc handleQueueOverlay(state: var AppState, key: iw.Key, chars: seq[Rune]) =
        state.overlay.cursor < state.playbackQueue.len:
       let qIdx = state.overlay.cursor
       let libIdx = state.playbackQueue[qIdx]
-      if libIdx < 0 or libIdx >= state.libraryTracks.len: break
+      if libIdx < 0 or libIdx >= state.libraryTracks.len: return
       let t = state.libraryTracks[libIdx]
       state.showNotification("Removed '" & t.displayName() & "' from queue")
       if state.player of DaemonClient:
@@ -1382,7 +1382,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
           try:
             minutes = state.playlistInputBuffer.parseInt()
           except ValueError:
-            state.showNotification("Invalid number"); break
+            state.showNotification("Invalid number"); return
           if state.player of DaemonClient:
             discard DaemonClient(state.player).setSleepTimer(minutes)
           state.sleepTimerRemaining = if minutes > 0: minutes else: 0
@@ -1994,6 +1994,8 @@ proc processEvents(state: var AppState) =
     case ev.kind
     of aekPositionChanged:
       state.timePos = ev.floatVal
+      state.basePos = ev.floatVal
+      state.baseTime = epochTime()
       state.markDirty(cePosition)
     of aekDurationChanged:
       state.duration = ev.floatVal
@@ -2003,6 +2005,8 @@ proc processEvents(state: var AppState) =
       state.markDirty(ceVolume)
     of aekPlaybackStarted:
       state.status = psPlaying
+      state.basePos = ev.floatVal
+      state.baseTime = epochTime()
       let autoAdvanced = ev.metadata.getOrDefault("auto_advanced", "false") == "true"
       # Sync track info from event metadata (for auto-advanced queue downloads)
       if ev.metadata.hasKey("track_path"):
@@ -2034,13 +2038,19 @@ proc processEvents(state: var AppState) =
             break
     of aekPlaybackPaused:
       state.status = psPaused
+      state.basePos = state.timePos
+      state.baseTime = epochTime()
       state.markDirty(cePlayState)
     of aekPlaybackStopped:
       state.status = psStopped
+      state.basePos = 0.0
+      state.baseTime = epochTime()
       state.markDirty(cePlayState)
     of aekTrackEnded:
       state.duration = 0.0
       state.timePos = 0.0
+      state.basePos = 0.0
+      state.baseTime = epochTime()
       # Consume queue — daemon already advanced
       if state.playbackQueue.len > 0:
         state.playbackQueue.delete(0)
@@ -2183,6 +2193,8 @@ proc processEvents(state: var AppState) =
     else: discard
   if state.player.timePos != state.timePos and state.status == psPlaying:
     state.timePos = state.player.timePos
+    state.basePos = state.timePos
+    state.baseTime = epochTime()
     state.markDirty(cePosition)
   if state.duration == 0.0 and state.player.duration > 0.0:
     state.duration = state.player.duration
@@ -2199,6 +2211,8 @@ proc fullStateSync(state: var AppState, daemonState: JsonNode) =
     state.currentPlayingChannel = daemonState["track_channel"].getStr("")
   if daemonState.hasKey("time_pos"):
     state.timePos = max(0.0, daemonState["time_pos"].getFloat(0.0))
+    state.basePos = state.timePos
+    state.baseTime = epochTime()
   if daemonState.hasKey("duration"):
     state.duration = max(0.0, daemonState["duration"].getFloat(0.0))
   if daemonState.hasKey("volume"):
@@ -2303,60 +2317,64 @@ proc runTui(args: seq[string]) =
         else:
           ctx.data.needsRedraw = true
       processEvents(ctx.data)
+      # Heartbeat timeout: disconnect if no data for 60 seconds
+      if ctx.data.player of DaemonClient:
+        let cli = DaemonClient(ctx.data.player)
+        if cli.connected and cli.lastDataAt > 0.0:
+          if epochTime() - cli.lastDataAt > 60.0:
+            cli.connected = false
       # Daemon reconnection watchdog
       if ctx.data.player of DaemonClient:
         let cli = DaemonClient(ctx.data.player)
         if not cli.connected:
-          ctx.data.reconnectAttempts.inc
           if not ctx.data.reconnecting:
             ctx.data.reconnecting = true
+            ctx.data.reconnectAttempts = 0
             ctx.data.setFeedback("[Daemon disconnected — reconnecting...]", nkWarning)
             ctx.data.markDirty(ceReconnecting)
-          if ctx.data.reconnectAttempts mod 30 == 0:
-            cli.ensureDaemon()
-            if cli.connected:
-              ctx.data.setFeedback("[Daemon reconnected]")
-              let daemonState = cli.getFullState()
-              fullStateSync(ctx.data, daemonState)
-              if daemonState.hasKey("queue"):
-                try:
-                  let qArr = daemonState["queue"]
-                  var queue: seq[int] = @[]
-                  for qItem in qArr.items:
-                    let qPath = qItem.getStr("")
-                    for i, t in ctx.data.libraryTracks:
-                      if t.path == qPath:
-                        queue.add(i)
-                        break
-                  ctx.data.playbackQueue = queue
-                  ctx.data.markDirtyBatch(ceQueue, cePlayState)
-                except: discard
-              # Re-fetch library from daemon to pick up any metadata changes
-              let libResp = cli.getLibrary()
-              if libResp.hasKey("tracks") and libResp["tracks"].len > 0:
-                ctx.data.loadLibraryFromDaemon(cli, libResp)
-                # Rebuild ytDownloaded from library tracks whose path is already local
-                ctx.data.ytDownloaded.clear()
-                let dlDir = ctx.data.ytDownloadDir
-                for t in ctx.data.libraryTracks:
-                  if t.path.startsWith(dlDir):
-                    ctx.data.ytDownloaded[t.path] = t.path
-                ctx.data.downloadCount = ctx.data.ytDownloaded.len
-              # Re-sync favourites from daemon
-              let favResp = cli.getFavouritesFromDaemon()
-              if favResp.hasKey("favourites"):
-                ctx.data.favouriteIds = initHashSet[int64]()
-                for fid in favResp["favourites"]:
-                  ctx.data.favouriteIds.incl(fid.getInt(0).int64)
-              if ctx.data.currentPlayingPath.len > 0:
-                for i, t in ctx.data.libraryTracks:
-                  if t.path == ctx.data.currentPlayingPath:
-                    ctx.data.selectIndex = i
-                    ctx.data.currentPlayingId = t.id
-                    break
-              ctx.data.reconnecting = false
-              ctx.data.reconnectAttempts = 0
-              ctx.data.markDirtyBatch(cePlayState, ceTrack, ceVolume, cePosition)
+          cli.ensureDaemon()
+          if cli.connected:
+            ctx.data.setFeedback("[Daemon reconnected]")
+            let daemonState = cli.getFullState()
+            fullStateSync(ctx.data, daemonState)
+            if daemonState.hasKey("queue"):
+              try:
+                let qArr = daemonState["queue"]
+                var queue: seq[int] = @[]
+                for qItem in qArr.items:
+                  let qPath = qItem.getStr("")
+                  for i, t in ctx.data.libraryTracks:
+                    if t.path == qPath:
+                      queue.add(i)
+                      break
+                ctx.data.playbackQueue = queue
+                ctx.data.markDirtyBatch(ceQueue, cePlayState)
+              except: discard
+            let libResp = cli.getLibrary()
+            if libResp.hasKey("tracks") and libResp["tracks"].len > 0:
+              ctx.data.loadLibraryFromDaemon(cli, libResp)
+              ctx.data.ytDownloaded.clear()
+              let dlDir = ctx.data.ytDownloadDir
+              for t in ctx.data.libraryTracks:
+                if t.path.startsWith(dlDir):
+                  ctx.data.ytDownloaded[t.path] = t.path
+              ctx.data.downloadCount = ctx.data.ytDownloaded.len
+            let favResp = cli.getFavouritesFromDaemon()
+            if favResp.hasKey("favourites"):
+              ctx.data.favouriteIds = initHashSet[int64]()
+              for fid in favResp["favourites"]:
+                ctx.data.favouriteIds.incl(fid.getInt(0).int64)
+            if ctx.data.currentPlayingPath.len > 0:
+              for i, t in ctx.data.libraryTracks:
+                if t.path == ctx.data.currentPlayingPath:
+                  ctx.data.selectIndex = i
+                  ctx.data.currentPlayingId = t.id
+                  break
+            ctx.data.reconnecting = false
+            ctx.data.reconnectAttempts = 0
+            ctx.data.basePos = ctx.data.timePos
+            ctx.data.baseTime = epochTime()
+            ctx.data.markDirtyBatch(cePlayState, ceTrack, ceVolume, cePosition)
         elif ctx.data.reconnecting:
           ctx.data.reconnecting = false
           ctx.data.reconnectAttempts = 0
@@ -2398,11 +2416,10 @@ proc runTui(args: seq[string]) =
         ctx.data.upNextTimer.dec
       if ctx.data.sleepTimerRemaining > 0 and ctx.data.player of DaemonClient:
         ctx.data.sleepTimerRemaining = DaemonClient(ctx.data.player).sleepTimerRemaining
-      # Reconnection cooldown (frame-based, no os.sleep)
-      if ctx.data.player of DaemonClient:
-        let cli = DaemonClient(ctx.data.player)
-        if cli.reconnectCooldown > 0:
-          cli.reconnectCooldown.dec
+      # Position extrapolation: estimate between position_changed events
+      if ctx.data.status == psPlaying:
+        let estimated = ctx.data.basePos + (epochTime() - ctx.data.baseTime)
+        ctx.data.timePos = clamp(estimated, 0.0, ctx.data.duration)
       let curW = terminal.terminalWidth()
       let curH = terminal.terminalHeight()
       resized = false
