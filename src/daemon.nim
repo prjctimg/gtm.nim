@@ -368,7 +368,9 @@ proc advanceToNextTrack(d: Daemon, forward: bool = true): bool =
     # Peek at next candidate without consuming
     var nextCandidate = ""
     if d.shuffleEnabled and d.shuffleIndex < d.shuffleOrder.len:
-      nextCandidate = d.playbackQueue[d.shuffleOrder[d.shuffleIndex]]
+      let sIdx = d.shuffleOrder[d.shuffleIndex]
+      if sIdx >= 0 and sIdx < d.playbackQueue.len:
+        nextCandidate = d.playbackQueue[sIdx]
     elif not d.shuffleEnabled:
       nextCandidate = d.playbackQueue[0]
     if nextCandidate.len == 0: return false
@@ -1408,7 +1410,9 @@ proc runDaemon*() =
     var nextQueuedPath = ""
     if daemon.player.state == 1:
       if daemon.shuffleEnabled and daemon.shuffleOrder.len > 0 and daemon.shuffleIndex < daemon.shuffleOrder.len:
-        nextQueuedPath = daemon.playbackQueue[daemon.shuffleOrder[daemon.shuffleIndex]]
+        let sIdx = daemon.shuffleOrder[daemon.shuffleIndex]
+        if sIdx >= 0 and sIdx < daemon.playbackQueue.len:
+          nextQueuedPath = daemon.playbackQueue[sIdx]
       elif not daemon.shuffleEnabled and daemon.playbackQueue.len > 0:
         nextQueuedPath = daemon.playbackQueue[0]
 
