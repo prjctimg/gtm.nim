@@ -62,6 +62,8 @@ proc connectToDaemon*(cli: DaemonClient): bool =
     cli.backendType = abtDaemon
     return true
   except:
+    if cli.sock != nil:
+      try: cli.sock.close() except: discard
     cli.sock = nil
     return false
 
