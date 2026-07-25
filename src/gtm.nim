@@ -41,7 +41,7 @@ proc loadConfig(state: var AppState) =
       let refreshSeed = state.config.refreshTheme or state.config.theme == "random"
       state.theme = getTheme(state.config.theme, refreshSeed)
       state.highlightGroups = initHighlightGroups(state.theme)
-    except:
+    except CatchableError:
       stderr.writeLine("[gtm] loadConfig error: " & getCurrentExceptionMsg())
 
 proc applyKeybindings(state: var AppState) =
@@ -55,7 +55,7 @@ proc applyKeybindings(state: var AppState) =
             keyList.add(k.getStr(""))
         if keyList.len > 0:
           state.rebindCommand(id, keyList)
-  except:
+  except CatchableError:
     stderr.writeLine("[gtm] applyKeybindings error: " & getCurrentExceptionMsg())
   state.rawKeybindingsJson = nil
 
@@ -79,7 +79,7 @@ proc saveConfig(state: AppState) =
     j["keybindings"] = state.rawKeybindingsJson
   try:
     writeFile(state.configPath, $j)
-  except:
+  except CatchableError:
     stderr.writeLine("[gtm] saveConfig error: " & getCurrentExceptionMsg())
 
 proc loadLibraryFromDaemon(state: var AppState, cli: DaemonClient, resp: JsonNode) =
@@ -409,10 +409,12 @@ proc saveCurrentQueue*(state: AppState) =
   let name = "queue-" & getTime().format("yyyyMMdd-HHmmss") & ".m3u"
   let path = dir / name
   var f = open(path, fmWrite)
-  f.writeLine("#EXTM3U")
-  for track in state.libraryTracks:
-    f.writeLine(track.path)
-  f.close()
+  try:
+    f.writeLine("#EXTM3U")
+    for track in state.libraryTracks:
+      f.writeLine(track.path)
+  finally:
+    f.close()
 
 proc parsePlaylists(state: var AppState, resp: JsonNode) =
   if resp.hasKey("playlists"):
@@ -767,6 +769,7 @@ proc adjustSetting(state: var AppState, delta: int) =
       state.saveConfig()
     of 2: # Max Downloads
       state.ytMaxConcurrentDownloads = max(1, min(10, state.ytMaxConcurrentDownloads + delta))
+      state.saveConfig()
     of 3: # Results Per Page
       state.ytSearchPageSize = max(5, min(50, state.ytSearchPageSize + delta * 5))
       state.saveConfig()
@@ -1644,8 +1647,8 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
     state.lastCommandName = "Stop"
   of iw.Key.CtrlN: state.nextTrack(); state.lastCommandName = "Next Track"
   of iw.Key.CtrlP: state.prevTrack(); state.lastCommandName = "Previous Track"
-  of iw.Key.CtrlU: state.adjustVolume(5); state.showVolumeCue(); state.lastCommandName = "Volume Up"
-  of iw.Key.CtrlD: state.adjustVolume(-5); state.showVolumeCue(); state.lastCommandName = "Volume Down"
+  of iw.Key.CtrlU: state.adjustVolume(5); state.lastCommandName = "Volume Up"
+  of iw.Key.CtrlD: state.adjustVolume(-5); state.lastCommandName = "Volume Down"
 
   of iw.Key.CtrlJ: state.moveSelection(1)
   of iw.Key.CtrlK: state.moveSelection(-1)
