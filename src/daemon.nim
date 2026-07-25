@@ -252,7 +252,7 @@ proc parseDaemonCommand(line: string): DaemonCmd =
     of "ping":
       result.kind = dckPing
     else: result.kind = dckStatus
-  except:
+  except CatchableError:
     result.kind = dckStatus
 
 proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): JsonNode =
@@ -1077,6 +1077,7 @@ proc runDaemon*() =
     else:
       discard dup2(cint(crashFd), cint(1))
       discard dup2(cint(crashFd), cint(2))
+    crashFile.close()
   discard prctl(15.cint, "gtmd")
   writePidFile()
   setupSignalHandlers()
