@@ -270,8 +270,11 @@ static void* decode_thread(void* arg) {
     }
 
     if (ctx->seek_pending) {
+      double target;
+      pthread_mutex_lock(&ctx->mutex);
       ctx->seek_pending = 0;
-      double target = ctx->seek_target;
+      target = ctx->seek_target;
+      pthread_mutex_unlock(&ctx->mutex);
       avcodec_flush_buffers(ctx->codec_ctx);
       AVStream* st = ctx->fmt_ctx->streams[ctx->audio_stream_idx];
       int64_t ts = (int64_t)(target / av_q2d(st->time_base));
@@ -314,8 +317,12 @@ static void* decode_thread(void* arg) {
       int total = conv * ctx->channels;
 
       if (ctx->volume != 1.0f) {
+        float vol;
+        pthread_mutex_lock(&ctx->mutex);
+        vol = ctx->volume;
+        pthread_mutex_unlock(&ctx->mutex);
         for (int i = 0; i < total; i++)
-          conv_buf[i] *= ctx->volume;
+          conv_buf[i] *= vol;
       }
 
       if (ctx->alsa_open) {
@@ -332,7 +339,9 @@ static void* decode_thread(void* arg) {
         }
       }
 
+      pthread_mutex_lock(&ctx->mutex);
       ctx->current_time += (double)conv / ctx->sample_rate;
+      pthread_mutex_unlock(&ctx->mutex);
       av_frame_unref(frame);
     }
   }
@@ -378,26 +387,36 @@ void ffmpeg_audio_stop(FfmpegAudioCtx* ctx) {
     AVStream* st = ctx->fmt_ctx->streams[ctx->audio_stream_idx];
     av_seek_frame(ctx->fmt_ctx, ctx->audio_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
   }
+  pthread_mutex_lock(&ctx->mutex);
   ctx->seek_pending = 0;
+  pthread_mutex_unlock(&ctx->mutex);
 }
 
 void ffmpeg_audio_seek(FfmpegAudioCtx* ctx, double seconds) {
   if (!ctx) return;
-  ctx->seek_target = ctx->current_time + seconds;
-  if (ctx->seek_target < 0.0) ctx->seek_target = 0.0;
-  if (ctx->duration > 0.0 && ctx->seek_target > ctx->duration)
-    ctx->seek_target = ctx->duration;
+  double target = ctx->current_time + seconds;
+  if (target < 0.0) target = 0.0;
+  if (ctx->duration > 0.0 && target > ctx->duration)
+    target = ctx->duration;
+  pthread_mutex_lock(&ctx->mutex);
+  ctx->seek_target = target;
   ctx->seek_pending = 1;
+  pthread_mutex_unlock(&ctx->mutex);
 }
 
 void ffmpeg_audio_set_volume(FfmpegAudioCtx* ctx, float volume) {
   if (!ctx) return;
+  pthread_mutex_lock(&ctx->mutex);
   ctx->volume = volume;
+  pthread_mutex_unlock(&ctx->mutex);
 }
 
 double ffmpeg_audio_get_time(FfmpegAudioCtx* ctx) {
   if (!ctx) return 0.0;
-  return ctx->current_time;
+  pthread_mutex_lock(&ctx->mutex);
+  double t = ctx->current_time;
+  pthread_mutex_unlock(&ctx->mutex);
+  return t;
 }
 
 double ffmpeg_audio_get_duration(FfmpegAudioCtx* ctx) {
@@ -451,6 +470,7 @@ typedef struct {
   float  gains[EQ_BANDS];
   int    active;
   float  sample_rate;
+  pthread_mutex_t mutex;
 } Equalizer;
 
 static void biquad_peaking(Biquad* f, float fs, float freq, float gain_db, float q) {
@@ -477,9 +497,11 @@ static float biquad_process(Biquad* f, float x) {
 }
 
 static void eq_init(Equalizer* eq, float sample_rate) {
+  pthread_mutex_destroy(&eq->mutex);
   memset(eq, 0, sizeof(Equalizer));
   eq->sample_rate = sample_rate;
   eq->active = 0;
+  pthread_mutex_init(&eq->mutex, NULL);
 }
 
 static void eq_rebuild(Equalizer* eq) {
@@ -494,12 +516,15 @@ static void eq_set_band(Equalizer* eq, int band, float gain_db) {
   if (band < 0 || band >= EQ_BANDS) return;
   if (gain_db < -12.0f) gain_db = -12.0f;
   if (gain_db > 12.0f) gain_db = 12.0f;
+  pthread_mutex_lock(&eq->mutex);
   eq->gains[band] = gain_db;
   eq_rebuild(eq);
+  pthread_mutex_unlock(&eq->mutex);
 }
 
 static void eq_apply(Equalizer* eq, float* data, int samples) {
-  if (!eq->active) return;
+  pthread_mutex_lock(&eq->mutex);
+  if (!eq->active) { pthread_mutex_unlock(&eq->mutex); return; }
   for (int i = 0; i < samples; i++) {
     float s = data[i];
     for (int b = 0; b < EQ_BANDS; b++) {
@@ -507,6 +532,7 @@ static void eq_apply(Equalizer* eq, float* data, int samples) {
     }
     data[i] = s;
   }
+  pthread_mutex_unlock(&eq->mutex);
 }
 
 static const char* EQ_PRESET_NAMES[] = {
@@ -561,6 +587,7 @@ typedef struct {
   volatile int      priming;        /* accumulate frames before first write */
   int               prime_target;   /* samples to accumulate before writing */
   Equalizer         eq;
+  pthread_mutex_t   mutex;
 } MixerCtx;
 
 static int mixer_alsa_open(MixerCtx* mx) {
@@ -706,8 +733,12 @@ static void* mixer_thread(void* arg) {
         eq_apply(&mx->eq, mixbuf, nsamples);
 
         // Apply volume
-        if (mx->volume != 1.0f)
-          for (int i = 0; i < nsamples; i++) mixbuf[i] *= mx->volume;
+        float mv;
+        pthread_mutex_lock(&mx->mutex);
+        mv = mx->volume;
+        pthread_mutex_unlock(&mx->mutex);
+        if (mv != 1.0f)
+          for (int i = 0; i < nsamples; i++) mixbuf[i] *= mv;
 
         if (mx->alsa_open) {
           int fw = snd_pcm_writei(mx->alsa_handle, mixbuf, nsamples / ch);
@@ -721,11 +752,15 @@ static void* mixer_thread(void* arg) {
           if (next != mx->pcm_rp) { mx->pcm_ring[wp] = mixbuf[i]; mx->pcm_wp = next; }
         }
 
+        pthread_mutex_lock(&mx->mutex);
         mx->current_time += (double)(nsamples / ch) / mx->master->sample_rate;
+        pthread_mutex_unlock(&mx->mutex);
         mx->crossfade_frames_remaining--;
         if (mx->crossfade_frames_remaining <= 0) {
+          pthread_mutex_lock(&mx->mutex);
           mx->crossfade_active = 0;
           mx->crossfade_reverse = 0;
+          pthread_mutex_unlock(&mx->mutex);
           // Auto-promote slave to master
           if (mx->slave) {
             FfmpegAudioCtx* old = mx->master;
@@ -744,7 +779,9 @@ static void* mixer_thread(void* arg) {
         }
       } else if (stotal < 0) {
         // Slave finished
+        pthread_mutex_lock(&mx->mutex);
         mx->crossfade_active = 0;
+        pthread_mutex_unlock(&mx->mutex);
         // Continue with master only
         goto normal_write;
       } else {
@@ -756,8 +793,12 @@ static void* mixer_thread(void* arg) {
       // Apply EQ to master output
       eq_apply(&mx->eq, mbuf, mtotal);
       // Apply volume
-      if (mx->volume != 1.0f)
-        for (int i = 0; i < mtotal; i++) mbuf[i] *= mx->volume;
+      float mv;
+      pthread_mutex_lock(&mx->mutex);
+      mv = mx->volume;
+      pthread_mutex_unlock(&mx->mutex);
+      if (mv != 1.0f)
+        for (int i = 0; i < mtotal; i++) mbuf[i] *= mv;
 
       if (mx->alsa_open && mx->priming) {
         // Accumulate samples to prevent ALSA underrun on slow streams
@@ -797,7 +838,9 @@ static void* mixer_thread(void* arg) {
           if (next != mx->pcm_rp) { mx->pcm_ring[wp] = mbuf[i]; mx->pcm_wp = next; }
         }
       }
+      pthread_mutex_lock(&mx->mutex);
       mx->current_time += (double)(mtotal / ch) / mx->master->sample_rate;
+      pthread_mutex_unlock(&mx->mutex);
     }
   }
 
@@ -821,6 +864,7 @@ MixerCtx* ffmpeg_mixer_init(void) {
   mx->volume = 1.0f;
   mx->priming = 0;
   mx->prime_target = 8192; /* ~93ms at 44100Hz stereo */
+  pthread_mutex_init(&mx->mutex, NULL);
   avformat_network_init();
   return mx;
 }
@@ -833,6 +877,7 @@ void ffmpeg_mixer_uninit(MixerCtx* mx) {
   mixer_alsa_close(mx);
   if (mx->master) ffmpeg_audio_uninit(mx->master);
   if (mx->slave) ffmpeg_audio_uninit(mx->slave);
+  pthread_mutex_destroy(&mx->mutex);
   free(mx);
 }
 
@@ -848,7 +893,11 @@ int ffmpeg_mixer_load_master(MixerCtx* mx, const char* path) {
   if (!mx->master) return 0;
   if (!ffmpeg_audio_load(mx->master, path)) return 0;
   mx->master_duration = mx->master->duration;
+  pthread_mutex_lock(&mx->mutex);
   mx->current_time = 0.0;
+  mx->crossfade_active = 0;
+  mx->crossfade_reverse = 0;
+  pthread_mutex_unlock(&mx->mutex);
   mx->master_ended = 0;
   // Reopen ALSA for new stream's sample rate/channels
   mixer_alsa_reopen(mx);
@@ -886,22 +935,26 @@ void ffmpeg_mixer_pause(MixerCtx* mx) {
 
 void ffmpeg_mixer_stop(MixerCtx* mx) {
   if (!mx) return;
-      mx->playing = 0;
+  mx->playing = 0;
   mx->paused = 1;
   if (mx->alsa_open) { snd_pcm_drop(mx->alsa_handle); snd_pcm_prepare(mx->alsa_handle); }
+  pthread_mutex_lock(&mx->mutex);
   mx->current_time = 0.0;
-  mx->master_ended = 0;
   mx->crossfade_active = 0;
   mx->crossfade_reverse = 0;
+  pthread_mutex_unlock(&mx->mutex);
+  mx->master_ended = 0;
   mx->priming = 0;
 }
 
 void ffmpeg_mixer_start_crossfade(MixerCtx* mx, int duration_frames, int reverse) {
   if (!mx || !mx->slave || !mx->slave_loaded) return;
+  pthread_mutex_lock(&mx->mutex);
   mx->crossfade_active = 1;
   mx->crossfade_total_frames = duration_frames;
   mx->crossfade_frames_remaining = duration_frames;
   mx->crossfade_reverse = reverse ? 1 : 0;
+  pthread_mutex_unlock(&mx->mutex);
   // Rewind slave to beginning
   if (mx->slave->fmt_ctx && mx->slave->audio_stream_idx >= 0) {
     avcodec_flush_buffers(mx->slave->codec_ctx);
@@ -917,7 +970,10 @@ void ffmpeg_mixer_set_crossfade_curve(MixerCtx* mx, int curve_type) {
 
 double ffmpeg_mixer_get_time(MixerCtx* mx) {
   if (!mx) return 0.0;
-  return mx->current_time;
+  pthread_mutex_lock(&mx->mutex);
+  double t = mx->current_time;
+  pthread_mutex_unlock(&mx->mutex);
+  return t;
 }
 
 double ffmpeg_mixer_get_duration(MixerCtx* mx) {
@@ -942,7 +998,9 @@ int ffmpeg_mixer_master_ended(MixerCtx* mx) {
 
 void ffmpeg_mixer_set_volume(MixerCtx* mx, float volume) {
   if (!mx) return;
+  pthread_mutex_lock(&mx->mutex);
   mx->volume = volume;
+  pthread_mutex_unlock(&mx->mutex);
 }
 
 int ffmpeg_mixer_read_pcm(MixerCtx* mx, float* output, int count) {
@@ -968,6 +1026,11 @@ void ffmpeg_mixer_seek(MixerCtx* mx, double seconds) {
   // Not implemented for mixer (seek during crossfade is complex)
   // Fall back to master seek
   ffmpeg_audio_seek(mx->master, seconds);
+}
+
+int ffmpeg_mixer_get_sample_rate(MixerCtx* mx) {
+  if (!mx || !mx->master) return 44100;
+  return mx->master->sample_rate;
 }
 
 int ffmpeg_mixer_set_eq_band(MixerCtx* mx, int band, float gain_db) {

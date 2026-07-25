@@ -95,6 +95,7 @@ when defined(useFFmpeg):
   proc ffmpeg_mixer_set_crossfade_curve(ctx: FfmpegCtx, curve_type: cint) {.importc.}
   proc ffmpeg_mixer_set_eq_band(ctx: FfmpegCtx, band: cint, gain_db: cfloat): cint {.importc.}
   proc ffmpeg_mixer_set_eq_preset(ctx: FfmpegCtx, name: cstring): cint {.importc.}
+  proc ffmpeg_mixer_get_sample_rate(ctx: FfmpegCtx): cint {.importc.}
 
   type
     FfmpegBackend* = ref object of AudioBackend
@@ -289,7 +290,7 @@ when defined(useFFmpeg):
 
   method startCrossfade*(b: MixerBackend, durationSeconds: float, reverse: bool = false) =
     if b.ctx == nil or b.duration <= 0: return
-    let sampleRate = 44100  # default, matched to master
+    let sampleRate = ffmpeg_mixer_get_sample_rate(b.ctx)
     let frames = (durationSeconds * sampleRate.float32).cint
     ffmpeg_mixer_start_crossfade(b.ctx, frames, reverse.cint)
 
