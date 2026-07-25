@@ -135,6 +135,10 @@ static void extract_metadata(FfmpegAudioCtx* ctx) {
   AVDictionary* md = NULL;
   AVDictionaryEntry* t;
 
+  ctx->title[0] = '\0';
+  ctx->artist[0] = '\0';
+  ctx->album[0] = '\0';
+
   /* Try format-level metadata first */
   t = av_dict_get(ctx->fmt_ctx->metadata, "title", NULL, 0);
   if (!t || !t->value[0]) {
@@ -147,6 +151,7 @@ static void extract_metadata(FfmpegAudioCtx* ctx) {
     }
   }
   if (t && t->value[0]) strncpy(ctx->title, t->value, sizeof(ctx->title) - 1);
+  ctx->title[sizeof(ctx->title) - 1] = '\0';
 
   t = av_dict_get(ctx->fmt_ctx->metadata, "artist", NULL, 0);
   if (!t || !t->value[0]) {
@@ -158,6 +163,7 @@ static void extract_metadata(FfmpegAudioCtx* ctx) {
     }
   }
   if (t && t->value[0]) strncpy(ctx->artist, t->value, sizeof(ctx->artist) - 1);
+  ctx->artist[sizeof(ctx->artist) - 1] = '\0';
 
   t = av_dict_get(ctx->fmt_ctx->metadata, "album", NULL, 0);
   if (!t || !t->value[0]) {
@@ -169,6 +175,7 @@ static void extract_metadata(FfmpegAudioCtx* ctx) {
     }
   }
   if (t && t->value[0]) strncpy(ctx->album, t->value, sizeof(ctx->album) - 1);
+  ctx->album[sizeof(ctx->album) - 1] = '\0';
 
   if (ctx->fmt_ctx->duration != AV_NOPTS_VALUE)
     ctx->duration = (double)ctx->fmt_ctx->duration / AV_TIME_BASE;
@@ -305,7 +312,9 @@ static void* decode_thread(void* arg) {
 
       int need = frame->nb_samples * ctx->channels;
       if (need > conv_cap) {
-        conv_buf = realloc(conv_buf, need * sizeof(float));
+        float* tmp = realloc(conv_buf, need * sizeof(float));
+        if (!tmp) { free(conv_buf); conv_buf = NULL; conv_cap = 0; goto decode_done; }
+        conv_buf = tmp;
         conv_cap = need;
       }
 
@@ -346,6 +355,7 @@ static void* decode_thread(void* arg) {
     }
   }
 
+  decode_done:
   av_packet_free(&pkt);
   av_frame_free(&frame);
   free(conv_buf);
@@ -628,7 +638,12 @@ static int decode_into_buf(FfmpegAudioCtx* ctx, AVPacket* pkt, AVFrame* frame,
   if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) return 0;
   if (ret < 0) return 0;
   int need = frame->nb_samples * ctx->channels;
-  if (need > *cap) { *buf = realloc(*buf, need * sizeof(float)); *cap = need; }
+  if (need > *cap) {
+    float* tmp = realloc(*buf, need * sizeof(float));
+    if (!tmp) { free(*buf); *buf = NULL; *cap = 0; av_frame_unref(frame); return 0; }
+    *buf = tmp;
+    *cap = need;
+  }
   uint8_t* planes[1] = { (uint8_t*)*buf };
   int conv = swr_convert(ctx->swr_ctx, planes, frame->nb_samples,
                          (const uint8_t**)frame->data, frame->nb_samples);
@@ -724,7 +739,12 @@ static void* mixer_thread(void* arg) {
         }
 
         int nsamples = mtotal < stotal ? mtotal : stotal;
-        if (nsamples > mixcap) { mixbuf = realloc(mixbuf, nsamples * sizeof(float)); mixcap = nsamples; }
+        if (nsamples > mixcap) {
+          float* tmp = realloc(mixbuf, nsamples * sizeof(float));
+          if (!tmp) { free(mixbuf); mixbuf = NULL; mixcap = 0; goto mixer_done; }
+          mixbuf = tmp;
+          mixcap = nsamples;
+        }
         for (int i = 0; i < nsamples; i++) {
           mixbuf[i] = mbuf[i] * mgain + (i < stotal ? sbuf[i] : 0.0f) * sgain;
         }
@@ -804,7 +824,9 @@ static void* mixer_thread(void* arg) {
         // Accumulate samples to prevent ALSA underrun on slow streams
         if (prime_filled + mtotal > prime_cap) {
           prime_cap = prime_filled + mtotal + 4096;
-          prime_buf = realloc(prime_buf, prime_cap * sizeof(float));
+          float* tmp = realloc(prime_buf, prime_cap * sizeof(float));
+          if (!tmp) { free(prime_buf); prime_buf = NULL; prime_cap = 0; goto mixer_done; }
+          prime_buf = tmp;
         }
         memcpy(prime_buf + prime_filled, mbuf, mtotal * sizeof(float));
         prime_filled += mtotal;
@@ -844,6 +866,7 @@ static void* mixer_thread(void* arg) {
     }
   }
 
+  mixer_done:
   av_packet_free(&mpkt);
   av_frame_free(&mframe);
   av_packet_free(&spkt);
