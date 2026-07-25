@@ -41,6 +41,34 @@ method seek*(b: AudioBackend, seconds: float) {.base.} = discard
 method setVolume*(b: AudioBackend, vol: int) {.base.} = discard
 method getVolume*(b: AudioBackend): int {.base.} = 80
 method togglePause*(b: AudioBackend) {.base.} = discard
+
+proc eventName*(k: AudioEventKind): string =
+  case k
+  of aekNone: "none"
+  of aekPlaybackStarted: "playback_started"
+  of aekPlaybackPaused: "playback_paused"
+  of aekPlaybackStopped: "playback_stopped"
+  of aekTrackEnded: "track_ended"
+  of aekPositionChanged: "position_changed"
+  of aekDurationChanged: "duration_changed"
+  of aekVolumeChanged: "volume_changed"
+  of aekMetadataChanged: "metadata_changed"
+  of aekError: "error"
+  of aekCustomEvent: "custom"
+
+proc parseEventName*(s: string): AudioEventKind =
+  case s
+  of "playback_started": aekPlaybackStarted
+  of "playback_paused": aekPlaybackPaused
+  of "playback_stopped": aekPlaybackStopped
+  of "track_ended": aekTrackEnded
+  of "position_changed": aekPositionChanged
+  of "duration_changed": aekDurationChanged
+  of "volume_changed": aekVolumeChanged
+  of "metadata_changed": aekMetadataChanged
+  of "error": aekError
+  of "custom": aekCustomEvent
+  else: aekNone
 method pollEvents*(b: AudioBackend): seq[AudioEvent] {.base.} = @[]
 method shutdown*(b: AudioBackend) {.base.} = discard
 method getMetadata*(b: AudioBackend, path: string): TrackMetadata {.base.} = TrackMetadata()

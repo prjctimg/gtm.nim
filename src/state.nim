@@ -335,7 +335,11 @@ type
     aboutVisible*: bool
     reconnecting*: bool
     reconnectAttempts*: int
-    pingMissed*: int
+    basePos*: float
+    baseTime*: float
+    lastDataAt*: float
+    nextRetryAt*: float
+    retryDelayMs*: int
     spinnerFrame*: int
     queueCursor*: int
     queuePendingConfirm*: int
@@ -399,6 +403,7 @@ proc dataDir*(): string =
 
 proc pidPath*(): string = stateDir() & "/gtmd.pid"
 proc sockPath*(): string = stateDir() & "/gtmd.sock"
+proc pulseSockPath*(): string = stateDir() & "/gtmd.pulse"
 
 proc clear*(o: var OverlayState) =
   o = OverlayState(kind: okNone)
