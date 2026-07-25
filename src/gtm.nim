@@ -176,8 +176,8 @@ proc getCurrentTrack(state: AppState): Track =
     let item = items[state.selectIndex]
     if item.kind == likTrack and item.trackIdx >= 0 and item.trackIdx < state.libraryTracks.len:
       return state.libraryTracks[item.trackIdx]
-  if state.libraryTracks.len > 0:
-    return state.libraryTracks[min(state.selectIndex, state.libraryTracks.len - 1)]
+  if state.libraryTracks.len > 0 and state.selectIndex >= 0 and state.selectIndex < state.libraryTracks.len:
+    return state.libraryTracks[state.selectIndex]
   Track()
 
 proc applyFilter(state: var AppState) =
@@ -251,7 +251,8 @@ proc nextTrack(state: var AppState) =
         if items.len > 0:
           discard cli.queueAdd(items)
   state.player.stop()
-  discard daemonSimpleCmd(DaemonClient(state.player), "next")
+  if state.player of DaemonClient:
+    discard daemonSimpleCmd(DaemonClient(state.player), "next")
   if state.playbackQueue.len > 0:
     state.playbackQueue.delete(0)
     state.markDirty(ceQueue)
@@ -262,7 +263,8 @@ proc nextTrack(state: var AppState) =
 proc prevTrack(state: var AppState) =
   state.upNextTimer = 0
   state.upNextMsg = ""
-  discard daemonSimpleCmd(DaemonClient(state.player), "prev")
+  if state.player of DaemonClient:
+    discard daemonSimpleCmd(DaemonClient(state.player), "prev")
   state.timePos = 0.0
   state.duration = 0.0
   state.markDirtyBatch(cePlayState, ceTrack)
@@ -1125,7 +1127,9 @@ proc handleQueueOverlay(state: var AppState, key: iw.Key, chars: seq[Rune]) =
     if state.playbackQueue.len > 0 and state.overlay.cursor >= 0 and
        state.overlay.cursor < state.playbackQueue.len:
       let qIdx = state.overlay.cursor
-      let t = state.libraryTracks[state.playbackQueue[qIdx]]
+      let libIdx = state.playbackQueue[qIdx]
+      if libIdx < 0 or libIdx >= state.libraryTracks.len: break
+      let t = state.libraryTracks[libIdx]
       state.showNotification("Removed '" & t.displayName() & "' from queue")
       if state.player of DaemonClient:
         discard DaemonClient(state.player).queueRemovePath(t.path)
@@ -1371,7 +1375,11 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
               ))
             state.rebuildItems()
         elif state.playlistInputPrompt.contains("Sleep timer"):
-          let minutes = state.playlistInputBuffer.parseInt()
+          var minutes = 0
+          try:
+            minutes = state.playlistInputBuffer.parseInt()
+          except ValueError:
+            state.showNotification("Invalid number"); break
           if state.player of DaemonClient:
             discard DaemonClient(state.player).setSleepTimer(minutes)
           state.sleepTimerRemaining = if minutes > 0: minutes else: 0
@@ -1667,11 +1675,14 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
   of iw.Key.AltD:
     if state.isPlaylistView() and state.playlistContentsIdx < 0:
       state.lastCommandName = "Delete Playlist"; execCmd(state, "delete_playlist")
-    elif state.tab == tabNowPlaying and state.playbackQueue.len > 0:
+    elif state.tab == tabNowPlaying and state.playbackQueue.len > 0 and
+         state.queueCursor >= 0 and state.queueCursor < state.playbackQueue.len:
       state.lastCommandName = "Remove from Queue"
-      let t = state.libraryTracks[state.playbackQueue[state.queueCursor]]
-      state.setFeedback("Remove '" & t.displayName() & "' from queue? (y/N)")
-      state.queuePendingConfirm = 1
+      let libIdx = state.playbackQueue[state.queueCursor]
+      if libIdx >= 0 and libIdx < state.libraryTracks.len:
+        let t = state.libraryTracks[libIdx]
+        state.setFeedback("Remove '" & t.displayName() & "' from queue? (y/N)")
+        state.queuePendingConfirm = 1
   of iw.Key.AltR:
     if state.isPlaylistView() and state.playlistContentsIdx < 0:
       state.lastCommandName = "Rename Playlist"; execCmd(state, "rename_playlist")
@@ -1892,10 +1903,13 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
   of iw.Key.D:
     if state.isPlaylistView() and state.playlistContentsIdx < 0:
       execCmd(state, "delete_playlist")
-    elif state.tab == tabNowPlaying and state.playbackQueue.len > 0:
-      let t = state.libraryTracks[state.playbackQueue[state.queueCursor]]
-      state.setFeedback("Remove '" & t.displayName() & "' from queue? (y/N)")
-      state.queuePendingConfirm = 1
+    elif state.tab == tabNowPlaying and state.playbackQueue.len > 0 and
+         state.queueCursor >= 0 and state.queueCursor < state.playbackQueue.len:
+      let libIdx = state.playbackQueue[state.queueCursor]
+      if libIdx >= 0 and libIdx < state.libraryTracks.len:
+        let t = state.libraryTracks[libIdx]
+        state.setFeedback("Remove '" & t.displayName() & "' from queue? (y/N)")
+        state.queuePendingConfirm = 1
   of iw.Key.ShiftD:
     if state.tab == tabNowPlaying and state.playbackQueue.len > 0:
       state.setFeedback("Clear entire queue? (y/N)")
