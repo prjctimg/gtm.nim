@@ -2332,7 +2332,14 @@ proc runTui(args: seq[string]) =
             ctx.data.reconnectAttempts = 0
             ctx.data.setFeedback("[Daemon disconnected — reconnecting...]", nkWarning)
             ctx.data.markDirty(ceReconnecting)
-          cli.ensureDaemon()
+          if ctx.data.reconnectAttempts >= 30:
+            if not ctx.data.giveUpReconnect:
+              ctx.data.giveUpReconnect = true
+              ctx.data.setFeedback("[Daemon unreachable after 30 attempts — giving up]", nkError)
+              ctx.data.markDirty(ceReconnecting)
+          else:
+            cli.ensureDaemon()
+            ctx.data.reconnectAttempts.inc
           if cli.connected:
             ctx.data.setFeedback("[Daemon reconnected]")
             let daemonState = cli.getFullState()
@@ -2372,6 +2379,7 @@ proc runTui(args: seq[string]) =
                   break
             ctx.data.reconnecting = false
             ctx.data.reconnectAttempts = 0
+            ctx.data.giveUpReconnect = false
             ctx.data.basePos = ctx.data.timePos
             ctx.data.baseTime = epochTime()
             ctx.data.markDirtyBatch(cePlayState, ceTrack, ceVolume, cePosition)

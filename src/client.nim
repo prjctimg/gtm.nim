@@ -128,6 +128,12 @@ proc drainEventLines(cli: DaemonClient, buf: var string) =
       of aekTrackEnded: discard
       of aekMetadataChanged:
         ev.strVal = j{"name"}.getStr("")
+      of aekQueueChanged:
+        if j.hasKey("queue"):
+          ev.metadata["queue"] = $j["queue"]
+        if j.hasKey("cursor"):
+          ev.intVal = j["cursor"].getInt(0)
+      of aekHeartbeat: discard
       of aekCustomEvent:
         ev.strVal = j{"name"}.getStr("")
         if j.hasKey("shuffleIndex"):
@@ -199,7 +205,15 @@ proc sendDaemonCmd*(cli: DaemonClient, cmd: JsonNode): JsonNode =
         let line = cli.buf[0..<nli]
         cli.buf = cli.buf[nli+1..^1]
         if line.len == 0: continue
-        let j = parseJson(line)
+        if line.len > 1048576:
+          cli.connected = false
+          cli.clearPending()
+          return %*{"ok": false, "error": "line exceeds 1 MiB"}
+        let j = try: parseJson(line) except CatchableError: nil
+        if j == nil:
+          cli.connected = false
+          cli.clearPending()
+          return %*{"ok": false, "error": "malformed JSON"}
         if j.hasKey("id") and j["id"].getInt(-1) == idNo:
           return j
         if j.hasKey("event"): continue
