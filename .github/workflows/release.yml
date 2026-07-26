@@ -80,7 +80,7 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
-        run: brew install pandoc
+        run: brew install pandoc ffmpeg pkg-config
 
       - name: Install Nim via choosenim
         run: |
@@ -102,13 +102,13 @@ jobs:
           ILLWAVE_DIR=$(find ~/.nimble/pkgs2 -maxdepth 1 -type d -name 'illwave*' 2>/dev/null | head -1)
           ANSIUTILS_DIR=$(find ~/.nimble/pkgs2 -maxdepth 1 -type d -name 'ansiutils*' 2>/dev/null | head -1)
           echo "NIMWAVE=$NIMWAVE_DIR ILLWAVE=$ILLWAVE_DIR ANSIUTILS=$ANSIUTILS_DIR"
-          if [ -n "$NIMWAVE_DIR" ]; then echo "NIMWAVE_PATH=$NIMWAVE_DIR/src" >> "$GITHUB_ENV"; fi
-          if [ -n "$ILLWAVE_DIR" ]; then echo "ILLWAVE_PATH=$ILLWAVE_DIR/src" >> "$GITHUB_ENV"; fi
-          if [ -n "$ANSIUTILS_DIR" ]; then echo "ANSIUTILS_PATH=$ANSIUTILS_DIR/src" >> "$GITHUB_ENV"; fi
+          if [ -n "$NIMWAVE_DIR" ]; then echo "NIMWAVE_PATH=$NIMWAVE_DIR" >> "$GITHUB_ENV"; fi
+          if [ -n "$ILLWAVE_DIR" ]; then echo "ILLWAVE_PATH=$ILLWAVE_DIR" >> "$GITHUB_ENV"; fi
+          if [ -n "$ANSIUTILS_DIR" ]; then echo "ANSIUTILS_PATH=$ANSIUTILS_DIR" >> "$GITHUB_ENV"; fi
 
       - name: Build release binaries
         run: |
-          nimble build -d:release
+          nim c -d:release src/gtm.nim
           nim c -d:release src/gtmd.nim
 
       - name: Locate binaries
