@@ -438,7 +438,10 @@ when defined(useFFmpeg):
 proc newAudioBackend*(backendType: AudioBackendType): AudioBackend =
   case backendType
   of abtFFmpeg:
-    result = newFfmpegBackend()
+    when defined(useFFmpeg):
+      result = newFfmpegBackend()
+    else:
+      result = nil
   of abtMixer:
     when defined(useFFmpeg):
       result = newMixerBackend()
