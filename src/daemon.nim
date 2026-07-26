@@ -1198,7 +1198,7 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
         result["ok"] = %true
         result["version"] = %daemonProtocolVersion
         result["daemon"] = %"gtmd-nim"
-        result["daemon_version"] = %"0.1.0"
+        result["daemon_version"] = %GTM_VERSION
   of dckUnknown:
     result["ok"] = %false
     result["error"] = %("unknown command: " & cmd.strArg)

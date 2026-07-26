@@ -170,10 +170,10 @@ suite "Protocol id envelope":
 
   test "handshake command uses id 0 and protocol v2":
     let cmd = %*{"cmd": "handshake", "version": 2, "client": "gtm",
-      "client_version": "0.1.0", "id": 0}
+      "client_version": "0.4.9", "id": 0}
     check cmd["id"].getInt(-1) == 0
     check cmd["version"].getInt(0) == 2
-    check cmd["client_version"].getStr("") == "0.1.0"
+    check cmd["client_version"].getStr("") == "0.4.9"
 
   test "handshake version negotiation rejects higher client version":
     let daemonProtocolVersion = 2
