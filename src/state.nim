@@ -382,11 +382,23 @@ const
 
 
 proc stateDir*(): string =
+  # Per gtm.spec protocol.md §Socket Locations fallback chain:
+  #   $XDG_RUNTIME_DIR/gtm  ->  /tmp/gtm-$USER/gtm  ->
+  #   $TMPDIR/gtm  ->  $HOME/.gtm/gtm
   let xdg = getEnv("XDG_RUNTIME_DIR", "")
   if xdg.len > 0:
-    result = xdg & "/gtm"
-  else:
-    result = "/tmp/gtm-" & getEnv("USER", "unknown")
+    return xdg & "/gtm"
+  let tmpUser = "/tmp/gtm-" & getEnv("USER", "unknown") & "/gtm"
+  if dirExists(tmpUser.parentDir()) or getEnv("USER", "") != "":
+    return tmpUser
+  let tmpdir = getEnv("TMPDIR", "")
+  if tmpdir.len > 0:
+    return tmpdir & "/gtm"
+  let home = getEnv("HOME", "")
+  if home.len > 0:
+    return home & "/.gtm/gtm"
+  # Last resort: /tmp/gtm-$USER/gtm (regardless of dirExists)
+  return tmpUser
 
 proc configDir*(): string =
   let xdg = getEnv("XDG_CONFIG_HOME", "")
