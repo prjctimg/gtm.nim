@@ -97,9 +97,17 @@ jobs:
         run: nimble install -y --depsOnly
 
       - name: Build release binaries
+        run: nimble build -d:release
+
+      - name: Locate binaries
+        id: bins
+        shell: bash
         run: |
-          nim c -d:release src/gtmd.nim
-          nim c -d:release src/gtm.nim
+          for p in bin/gtm bin/gtmd gtm gtmd; do
+            [ -f "$p" ] && echo "found: $p"
+          done
+          ls -la bin/ 2>/dev/null || true
+          ls -la gtm gtmd 2>/dev/null || true
 
       - name: Generate manpages
         run: |
@@ -113,8 +121,17 @@ jobs:
         shell: bash
         run: |
           platform="${{ matrix.platform }}"
-          cp bin/gtm "gtm-${platform}"
-          cp bin/gtmd "gtmd-${platform}"
+          # nimble may put binaries in bin/ or project root
+          find_binary() {
+            for p in "bin/$1" "$1" ".nimble/bin/$1"; do
+              [ -f "$p" ] && { echo "$p"; return 0; }
+            done
+            echo "ERROR: $1 not found" >&2; return 1
+          }
+          GTM_BIN=$(find_binary gtm)
+          GTMD_BIN=$(find_binary gtmd)
+          cp "$GTM_BIN" "gtm-${platform}"
+          cp "$GTMD_BIN" "gtmd-${platform}"
 
           # gtm-full: gtm + gtmd + all manpages
           tar czf "gtm-full-${platform}.tar.gz" \
