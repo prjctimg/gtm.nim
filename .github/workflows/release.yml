@@ -96,10 +96,15 @@ jobs:
       - name: Install nimble dependencies
         run: |
           nimble install -y --depsOnly
-          echo "NIMWAVE_PATH=$(ls -d ~/.nimble/pkgs2/nimwave*/src 2>/dev/null | head -1)" >> "$GITHUB_ENV"
-          echo "ILLWAVE_PATH=$(ls -d ~/.nimble/pkgs2/illwave*/src 2>/dev/null | head -1)" >> "$GITHUB_ENV"
-          echo "ANSIUTILS_PATH=$(ls -d ~/.nimble/pkgs2/ansiutils*/src 2>/dev/null | head -1)" >> "$GITHUB_ENV"
-          echo "NIMWAVE=$NIMWAVE_PATH ILLWAVE=$ILLWAVE_PATH ANSI=$ANSIUTILS_PATH"
+          echo "=== Package directories ==="
+          ls -d ~/.nimble/pkgs2/*/  2>/dev/null || true
+          NIMWAVE_DIR=$(find ~/.nimble/pkgs2 -maxdepth 1 -type d -name 'nimwave*' 2>/dev/null | head -1)
+          ILLWAVE_DIR=$(find ~/.nimble/pkgs2 -maxdepth 1 -type d -name 'illwave*' 2>/dev/null | head -1)
+          ANSIUTILS_DIR=$(find ~/.nimble/pkgs2 -maxdepth 1 -type d -name 'ansiutils*' 2>/dev/null | head -1)
+          echo "NIMWAVE=$NIMWAVE_DIR ILLWAVE=$ILLWAVE_DIR ANSIUTILS=$ANSIUTILS_DIR"
+          if [ -n "$NIMWAVE_DIR" ]; then echo "NIMWAVE_PATH=$NIMWAVE_DIR/src" >> "$GITHUB_ENV"; fi
+          if [ -n "$ILLWAVE_DIR" ]; then echo "ILLWAVE_PATH=$ILLWAVE_DIR/src" >> "$GITHUB_ENV"; fi
+          if [ -n "$ANSIUTILS_DIR" ]; then echo "ANSIUTILS_PATH=$ANSIUTILS_DIR/src" >> "$GITHUB_ENV"; fi
 
       - name: Build release binaries
         run: |
