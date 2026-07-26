@@ -24,26 +24,26 @@ proc parseFilenameForMetadata(path: string): tuple[title, artist: string] =
 type
   DaemonCmdKind* = enum
     dckPlay, dckPause, dckStop, dckSeek, dckNext, dckPrev,
-    dckSetVolume, dckGetVolume, dckLoadFile, dckTogglePause,
-    dckQuit, dckStatus, dckScan, dckNowPlaying,
+    dckSetVolume, dckGetVolume,
+    dckPlayPause,
+    dckQuit, dckGetStatus, dckScan,
     dckCreatePlaylist, dckDeletePlaylist, dckRenamePlaylist,
     dckAddToPlaylist, dckRemoveFromPlaylist,
     dckListPlaylists, dckGetPlaylistTracks,
-    dckSetShuffle, dckSetRepeat, dckSetSleepTimer, dckGetState, dckResume,
-    dckPrepareNext, dckCrossfade,
-    dckSetEqBand, dckSetEqPreset,
+    dckToggleShuffle, dckCycleRepeat, dckSetSleepTimer, dckCancelSleepTimer,
+    dckCrossfade,
+    dckSetEqPreset, dckSetEqEnabled, dckListEqPresets,
     dckGetLibrary, dckAddTrack, dckUpdateTrackPath,
-    dckQueueAdd, dckQueueRemove, dckQueueRemovePath, dckQueueClear, dckQueueList, dckQueueSetCursor,
-    dckAddFavourite, dckRemoveFavourite, dckGetFavourites, dckGetFullState,
+    dckQueueAdd, dckQueueRemove, dckQueueClear, dckQueueList, dckQueueSetCursor,
+    dckAddFavourite, dckRemoveFavourite, dckGetFavourites,
     dckYtSearch, dckYtSearchPoll, dckYtSearchCancel,
     dckYtResolveStream, dckYtResolveStreamPoll,
     dckYtDownload, dckYtDownloadPoll, dckYtCancelDownload,
     dckYtListDownloads, dckYtFetchPlaylist, dckYtFetchPlaylistPoll,
     dckYtSetConfig, dckYtGetSearchHistory, dckYtClearSearchHistory,
-    dckListEqPresets,
-    dckSetCrossfadeCurve,
     dckPing,
     dckHandshake,
+    dckCheckHealth, dckToggleMute, dckSearch,
     dckUnknown
 
   DaemonCmd* = object
@@ -150,24 +150,23 @@ proc parseDaemonCommand(line: string): DaemonCmd =
     let j = parseJson(line)
     let cmd = j["cmd"].getStr()
     case cmd
-    of "play": result.kind = dckPlay
+    of "play":
+      result.kind = dckPlay; result.strArg = j{"path"}.getStr("")
+      result.floatArg = j{"start_pos"}.getFloat(0.0)
+      result.strArg2 = j{"title"}.getStr("")
+      result.strArg3 = j{"channel"}.getStr("")
     of "pause": result.kind = dckPause
     of "stop": result.kind = dckStop
-    of "toggle_pause": result.kind = dckTogglePause
+    of "play_pause": result.kind = dckPlayPause
     of "seek":
-      result.kind = dckSeek; result.floatArg = j{"seconds"}.getFloat(5.0)
+      result.kind = dckSeek; result.floatArg = j{"position_secs"}.getFloat(5.0)
     of "next": result.kind = dckNext
     of "prev": result.kind = dckPrev
     of "set_volume":
       result.kind = dckSetVolume; result.intArg = j{"volume"}.getInt(80)
     of "get_volume": result.kind = dckGetVolume
-    of "load_file":
-      result.kind = dckLoadFile; result.strArg = j{"path"}.getStr("")
-      result.strArg2 = j{"title"}.getStr("")
-      result.strArg3 = j{"channel"}.getStr("")
     of "quit": result.kind = dckQuit
-    of "status": result.kind = dckStatus
-    of "now_playing": result.kind = dckNowPlaying
+    of "get_status": result.kind = dckGetStatus
     of "create_playlist":
       result.kind = dckCreatePlaylist; result.strArg = j{"name"}.getStr("")
     of "delete_playlist":
@@ -183,24 +182,30 @@ proc parseDaemonCommand(line: string): DaemonCmd =
       result.kind = dckGetPlaylistTracks; result.intArg = j{"playlist_id"}.getInt(0)
     of "scan":
       result.kind = dckScan; result.strArg = j{"path"}.getStr("")
-    of "set_shuffle":
-      result.kind = dckSetShuffle; result.intArg = j{"enabled"}.getInt(0)
-    of "set_repeat":
-      result.kind = dckSetRepeat; result.intArg = j{"mode"}.getInt(0)
+    of "toggle_shuffle": result.kind = dckToggleShuffle
+    of "cycle_repeat":
+      result.kind = dckCycleRepeat
+      let modeStr = j{"mode"}.getStr("off")
+      result.intArg = case modeStr
+        of "one": 2
+        of "all": 1
+        else: 0
     of "set_sleep_timer":
       result.kind = dckSetSleepTimer; result.intArg = j{"minutes"}.getInt(0)
-    of "get_state": result.kind = dckGetState
-    of "resume": result.kind = dckResume
-    of "prepare_next":
-      result.kind = dckPrepareNext; result.strArg = j{"path"}.getStr("")
+    of "cancel_sleep_timer": result.kind = dckCancelSleepTimer
     of "crossfade":
-      result.kind = dckCrossfade; result.floatArg = j{"duration"}.getFloat(5.0)
-    of "set_eq_band":
-      result.kind = dckSetEqBand; result.intArg = j{"band"}.getInt(0); result.floatArg = j{"gain_db"}.getFloat(0.0)
+      result.kind = dckCrossfade
+      if j.hasKey("enabled"):
+        result.intArg = if j["enabled"].getBool(false): 1 else: 0
+      else:
+        result.intArg = 1
+      result.floatArg = j{"duration_secs"}.getFloat(5.0)
+      result.strArg = j{"easing"}.getStr("equal_power")
     of "set_eq_preset":
-      result.kind = dckSetEqPreset; result.strArg = j{"name"}.getStr("")
-    of "set_crossfade_curve":
-      result.kind = dckSetCrossfadeCurve; result.intArg = j{"curve_type"}.getInt(1)
+      result.kind = dckSetEqPreset; result.strArg = j{"preset"}.getStr("")
+    of "set_eq_enabled":
+      result.kind = dckSetEqEnabled
+      result.intArg = if j{"enabled"}.getBool(true): 1 else: 0
     of "get_library": result.kind = dckGetLibrary
     of "add_track":
       result.kind = dckAddTrack; result.strArg = $j["data"]
@@ -210,60 +215,46 @@ proc parseDaemonCommand(line: string): DaemonCmd =
       result.kind = dckQueueAdd; result.strArg = $j["data"]
     of "queue_remove":
       result.kind = dckQueueRemove; result.intArg = j{"index"}.getInt(0)
-    of "queue_remove_path":
-      result.kind = dckQueueRemovePath; result.strArg = j{"path"}.getStr("")
-    of "queue_clear":
-      result.kind = dckQueueClear
-    of "queue_list":
-      result.kind = dckQueueList
+    of "queue_clear": result.kind = dckQueueClear
+    of "queue_list": result.kind = dckQueueList
     of "queue_set_cursor":
       result.kind = dckQueueSetCursor; result.intArg = j{"index"}.getInt(0)
     of "add_favourite":
       result.kind = dckAddFavourite; result.intArg = j{"track_id"}.getInt(0)
     of "remove_favourite":
       result.kind = dckRemoveFavourite; result.intArg = j{"track_id"}.getInt(0)
-    of "get_favourites":
-      result.kind = dckGetFavourites
-    of "get_full_state":
-      result.kind = dckGetFullState
+    of "get_favourites": result.kind = dckGetFavourites
     of "yt_search":
       result.kind = dckYtSearch; result.strArg = j{"query"}.getStr(""); result.intArg = j{"page_size"}.getInt(10)
-    of "yt_search_poll":
-      result.kind = dckYtSearchPoll
-    of "yt_search_cancel":
-      result.kind = dckYtSearchCancel
+    of "yt_search_poll": result.kind = dckYtSearchPoll
+    of "yt_search_cancel": result.kind = dckYtSearchCancel
     of "yt_resolve_stream":
       result.kind = dckYtResolveStream; result.strArg = j{"url"}.getStr("")
       result.strArg2 = j{"title"}.getStr(""); result.strArg3 = j{"channel"}.getStr("")
-    of "yt_resolve_stream_poll":
-      result.kind = dckYtResolveStreamPoll
+    of "yt_resolve_stream_poll": result.kind = dckYtResolveStreamPoll
     of "yt_download":
       result.kind = dckYtDownload; result.strArg = j{"url"}.getStr("")
       result.strArg2 = j{"title"}.getStr(""); result.strArg3 = j{"channel"}.getStr("")
-    of "yt_download_poll":
-      result.kind = dckYtDownloadPoll
+    of "yt_download_poll": result.kind = dckYtDownloadPoll
     of "yt_cancel_download":
       result.kind = dckYtCancelDownload; result.strArg = j{"url"}.getStr("")
-    of "yt_list_downloads":
-      result.kind = dckYtListDownloads
+    of "yt_list_downloads": result.kind = dckYtListDownloads
     of "yt_fetch_playlist":
       result.kind = dckYtFetchPlaylist; result.strArg = j{"url"}.getStr("")
-    of "yt_fetch_playlist_poll":
-      result.kind = dckYtFetchPlaylistPoll
+    of "yt_fetch_playlist_poll": result.kind = dckYtFetchPlaylistPoll
     of "yt_set_config":
       result.kind = dckYtSetConfig; result.strArg = j{"cookie_source"}.getStr("")
       result.strArg2 = j{"js_runtime"}.getStr(""); result.strArg3 = j{"download_dir"}.getStr("")
       result.intArg = j{"max_concurrent"}.getInt(4)
-    of "yt_get_search_history":
-      result.kind = dckYtGetSearchHistory
-    of "yt_clear_search_history":
-      result.kind = dckYtClearSearchHistory
-    of "list_eq_presets":
-      result.kind = dckListEqPresets
-    of "ping":
-      result.kind = dckPing
-    of "handshake":
-      result.kind = dckHandshake
+    of "yt_get_search_history": result.kind = dckYtGetSearchHistory
+    of "yt_clear_search_history": result.kind = dckYtClearSearchHistory
+    of "list_eq_presets": result.kind = dckListEqPresets
+    of "toggle_mute": result.kind = dckToggleMute
+    of "search":
+      result.kind = dckSearch; result.strArg = j{"query"}.getStr("")
+    of "check_health": result.kind = dckCheckHealth
+    of "ping": result.kind = dckPing
+    of "handshake": result.kind = dckHandshake
     else:
       result.kind = dckUnknown
       result.strArg = cmd
@@ -516,11 +507,10 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
     result["error"] = %"no audio backend"
     return
   case cmd.kind
-  of dckLoadFile:
+  of dckPlay:
     if cmd.strArg.len > 0:
       d.upNextSent = false
       d.autoAdvancing = false
-      # Push current track to history before switching
       if d.currentTrackPath.len > 0 and d.currentTrackPath != cmd.strArg:
         d.trackHistory.add(d.currentTrackPath)
         if d.trackHistory.len > 50:
@@ -532,9 +522,7 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       d.currentTrackChannel = cmd.strArg3
       d.player.play()
       d.idleFrames = 0
-      # Poll events once so state reflects actual playback status
       discard d.player.pollEvents()
-      # Track play count for library tracks, or add YouTube streams to library
       var trackId = d.lib.findTrackByPath(d.currentTrackPath)
       if trackId == 0 and d.currentTrackTitle.len > 0:
         trackId = d.lib.addTrack(d.currentTrackPath, d.currentTrackTitle, d.currentTrackChannel, "YouTube", 0.0, 0, 0, "")
@@ -550,15 +538,11 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       result["time_pos"] = %d.player.timePos
       when defined(useMpris):
         emitMprisPlayerChanged(d)
-  of dckPlay:
-    d.player.play(); d.idleFrames = 0
-    when defined(useMpris):
-      emitMprisPlayerChanged(d)
   of dckPause:
     d.player.pause()
     when defined(useMpris):
       emitMprisPlayerChanged(d)
-  of dckTogglePause:
+  of dckPlayPause:
     d.player.togglePause(); d.idleFrames = 0
     when defined(useMpris):
       emitMprisPlayerChanged(d)
@@ -636,7 +620,7 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       d.lib.closeDb()
     d.player.shutdown()
     d.running = false
-  of dckStatus, dckNowPlaying:
+  of dckGetStatus:
     let st = case d.player.state
       of 0: "stopped"
       of 1: "playing"
@@ -652,17 +636,43 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
     let flags = d.player.getStatusFlags()
     result["crossfading"] = %flags.crossfading
     result["master_ended"] = %flags.masterEnded
-  of dckPrepareNext:
-    d.player.prepareNext(cmd.strArg)
+    result["shuffle"] = %d.shuffleEnabled
+    result["repeat"] = %d.repeatMode
+    result["track_path"] = %d.currentTrackPath
+    if d.currentTrackTitle.len > 0:
+      result["track_title"] = %d.currentTrackTitle
+    elif d.currentTrackPath.contains("youtube.com") or d.currentTrackPath.contains("googlevideo.com"):
+      result["track_title"] = %d.player.metadata.title
+    else:
+      result["track_title"] = %(splitFile(d.currentTrackPath).name.replace(".", " "))
+    if d.currentTrackChannel.len > 0:
+      result["track_channel"] = %d.currentTrackChannel
+    elif d.player.metadata.artist.len > 0:
+      result["track_channel"] = %d.player.metadata.artist
+    if d.player.metadata.album.len > 0:
+      result["track_album"] = %d.player.metadata.album
+    result["backend_type"] = %(if d.player of MixerBackend: "Mixer" elif d.player of FfmpegBackend: "FFmpeg" else: "ALSA")
+    var qArr = newJArray()
+    for p in d.playbackQueue:
+      qArr.add(%p)
+    result["queue"] = qArr
   of dckCrossfade:
-    d.player.startCrossfade(cmd.floatArg)
-  of dckSetEqBand:
-    d.player.setEqBand(cmd.intArg, cmd.floatArg)
+    let enabled = cmd.intArg != 0
+    if enabled:
+      d.crossfadeDuration = int(cmd.floatArg)
+      case cmd.strArg
+      of "linear": d.crossfadeCurve = 0
+      of "exponential": d.crossfadeCurve = 2
+      else: d.crossfadeCurve = 1
+      d.player.setCrossfadeCurve(d.crossfadeCurve)
+    else:
+      d.crossfadeDuration = 0
+    result["crossfade_enabled"] = %(d.crossfadeDuration > 0)
+    result["crossfade_duration"] = %d.crossfadeDuration
   of dckSetEqPreset:
     d.player.setEqPreset(cmd.strArg)
-  of dckSetCrossfadeCurve:
-    d.crossfadeCurve = cmd.intArg
-    d.player.setCrossfadeCurve(cmd.intArg)
+  of dckSetEqEnabled:
+    d.player.setEqEnabled(cmd.intArg != 0)
   of dckGetLibrary:
     if d.lib != nil:
       let dbTracks = d.lib.loadTracks()
@@ -777,15 +787,15 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
         d.scanningIdx = 0
         result["scanning"] = %true
         result["total_files"] = %d.scanningFiles.len
-  of dckSetShuffle:
-    d.shuffleEnabled = cmd.intArg != 0
+  of dckToggleShuffle:
+    d.shuffleEnabled = not d.shuffleEnabled
     if d.shuffleEnabled and d.playbackQueue.len > 0:
       d.shuffleOrder = shuffleOrder(d.playbackQueue.len)
       d.shuffleIndex = 0
     result["shuffle"] = %d.shuffleEnabled
     when defined(useMpris):
       emitMprisPlayerChanged(d)
-  of dckSetRepeat:
+  of dckCycleRepeat:
     d.repeatMode = cmd.intArg
     result["repeat"] = %d.repeatMode
     when defined(useMpris):
@@ -793,51 +803,9 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
   of dckSetSleepTimer:
     d.sleepTimerRemaining = cmd.intArg
     result["sleep_timer"] = %d.sleepTimerRemaining
-  of dckGetState:
-    result["shuffle"] = %d.shuffleEnabled
-    result["repeat"] = %d.repeatMode
-    result["sleep_timer"] = %d.sleepTimerRemaining
-    result["time_pos"] = %d.player.timePos
-    result["duration"] = %d.player.duration
-    result["track_path"] = %d.currentTrackPath
-    if d.currentTrackPath.len > 0:
-      if d.currentTrackTitle.len > 0:
-        result["track_title"] = %d.currentTrackTitle
-      elif d.currentTrackPath.contains("youtube.com") or d.currentTrackPath.contains("googlevideo.com"):
-        result["track_title"] = %d.player.metadata.title
-      else:
-        result["track_title"] = %(splitFile(d.currentTrackPath).name.replace(".", " "))
-      if d.currentTrackChannel.len > 0:
-        result["track_channel"] = %d.currentTrackChannel
-      elif d.player.metadata.artist.len > 0:
-        result["track_channel"] = %d.player.metadata.artist
-      if d.player.metadata.album.len > 0:
-        result["track_album"] = %d.player.metadata.album
-    let flags2 = d.player.getStatusFlags()
-    result["crossfading"] = %flags2.crossfading
-    result["master_ended"] = %flags2.masterEnded
-    let st2 = case d.player.state
-      of 0: "stopped"
-      of 1: "playing"
-      of 2: "paused"
-      else: "unknown"
-    result["state"] = %st2
-    result["volume"] = %d.player.volume
-    result["backend_type"] = %(if d.player of MixerBackend: "Mixer" elif d.player of FfmpegBackend: "FFmpeg" else: "ALSA")
-  of dckResume:
-    if d.currentTrackPath.len > 0:
-      d.idleFrames = 0
-      let st = case d.player.state
-        of 0: "stopped"
-        of 1: "playing"
-        of 2: "paused"
-        else: "stopped"
-      result["state"] = %st
-      result["track"] = %d.currentTrackPath
-      result["time_pos"] = %d.player.timePos
-      result["duration"] = %d.player.duration
-    else:
-      result["state"] = %"stopped"
+  of dckCancelSleepTimer:
+    d.sleepTimerRemaining = 0
+    result["sleep_timer"] = %0
   of dckQueueAdd:
     if cmd.strArg.len > 0:
       try:
@@ -885,12 +853,6 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
     if cmd.intArg >= 0 and cmd.intArg < d.playbackQueue.len:
       d.playbackQueue.delete(cmd.intArg)
     d.sendQueueEvent()
-  of dckQueueRemovePath:
-    if cmd.strArg.len > 0:
-      let idx = d.playbackQueue.find(cmd.strArg)
-      if idx >= 0:
-        d.playbackQueue.delete(idx)
-    d.sendQueueEvent()
   of dckQueueClear:
     d.playbackQueue = @[]
     d.shuffleOrder = @[]
@@ -916,39 +878,6 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       for t in d.lib.getFavourites():
         arr.add(%t)
       result["favourites"] = arr
-  of dckGetFullState:
-    result["shuffle"] = %d.shuffleEnabled
-    result["repeat"] = %d.repeatMode
-    result["sleep_timer"] = %d.sleepTimerRemaining
-    result["volume"] = %d.player.volume
-    result["time_pos"] = %d.player.timePos
-    result["duration"] = %d.player.duration
-    result["track_path"] = %d.currentTrackPath
-    result["track_title"] = %d.currentTrackTitle
-    result["track_channel"] = %d.currentTrackChannel
-    result["track_album"] = %d.player.metadata.album
-    result["crossfading"] = %d.player.getStatusFlags().crossfading
-    result["master_ended"] = %d.player.getStatusFlags().masterEnded
-    var qArr = newJArray()
-    for p in d.playbackQueue:
-      qArr.add(%p)
-    result["queue"] = qArr
-    var soArr = newJArray()
-    for i in d.shuffleOrder:
-      soArr.add(%i)
-    result["shuffleOrder"] = soArr
-    result["shuffleIndex"] = %d.shuffleIndex
-    result["crossfadeDuration"] = %d.crossfadeDuration
-    result["crossfadeCurve"] = %d.crossfadeCurve
-    result["crossfadePrepared"] = %d.crossfadePrepared
-    result["crossfadeStarted"] = %d.crossfadeStarted
-    result["crossfadeNextPath"] = %d.crossfadeNextPath
-    let st = case d.player.state
-      of 0: "stopped"
-      of 1: "playing"
-      of 2: "paused"
-      else: "unknown"
-    result["state"] = %st
   of dckYtSearch:
     if d.ytSearchActive:
       try: d.ytSearchProcess.terminate() except: discard
@@ -1083,6 +1012,26 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       d.lib.clearSearchHistory()
   of dckListEqPresets:
     result["presets"] = %["Flat", "Rock", "Pop", "Classical", "Jazz", "HipHop", "Vocal", "BassBoost", "Headphones", "Laptop"]
+  of dckToggleMute:
+    if d.player.volume > 0:
+      d.player.setVolume(0)
+    else:
+      d.player.setVolume(80)
+    result["volume"] = %d.player.volume
+  of dckSearch:
+    if d.lib != nil and cmd.strArg.len > 0:
+      let tracks = d.lib.searchTracks(cmd.strArg)
+      var arr = newJArray()
+      for t in tracks:
+        arr.add(%*{
+          "id": %t.id, "path": %t.path, "title": %t.title,
+          "artist": %t.artist, "album": %t.album, "duration": %t.duration
+        })
+      result["tracks"] = arr
+  of dckCheckHealth:
+    result["clients_connected"] = %d.clients.len
+    result["audio_backend"] = %(if d.player of MixerBackend: "mixer" elif d.player of FfmpegBackend: "ffmpeg" else: "process")
+    result["audio_working"] = %d.player.working
   of dckPing:
     result["pong"] = %true
   of dckHandshake:

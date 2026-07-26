@@ -296,6 +296,30 @@ when defined(useSqlite):
       ))
     finalize(stmt)
 
+  proc searchTracks*(lib: LibraryDb, query: string): seq[Track] =
+    let pattern = "%" & query & "%"
+    let stmt = prepare(lib.db, """
+      SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played
+      FROM tracks t
+      LEFT JOIN artists a ON t.artist_id = a.id
+      LEFT JOIN albums al ON t.album_id = al.id
+      WHERE t.title LIKE ?1 OR t.path LIKE ?1 OR a.name LIKE ?1 OR al.title LIKE ?1
+      ORDER BY t.title
+      LIMIT 50
+    """)
+    if stmt == nil: return
+    discard sqlite3_bind_text(stmt, 1, pattern.cstring, pattern.len.cint, SQLITE_TRANSIENT)
+    while sqlite3_step(stmt) == SQLITE_ROW:
+      result.add(Track(
+        id: colInt64(stmt, 0.cint), path: colText(stmt, 1.cint), title: colText(stmt, 2.cint),
+        artist: colText(stmt, 3.cint), album: colText(stmt, 4.cint), duration: colFloat(stmt, 5.cint),
+        trackNum: colInt(stmt, 6.cint), year: colInt(stmt, 7.cint),
+        genre: colText(stmt, 8.cint), playCount: colInt(stmt, 9.cint),
+        artistId: colInt64(stmt, 10.cint), albumId: colInt64(stmt, 11.cint),
+        addedAt: colText(stmt, 12.cint), lastPlayed: colText(stmt, 13.cint)
+      ))
+    finalize(stmt)
+
   proc loadArtists*(lib: LibraryDb): seq[ArtistEnt] =
     let stmt = prepare(lib.db, "SELECT id, name FROM artists ORDER BY name")
     if stmt == nil: return
@@ -479,6 +503,7 @@ else:
   proc addTrack*(lib: LibraryDb, path, title, artist, album: string, duration: float,
                  trackNum, year: int, genre: string): int64 = 0
   proc loadTracks*(lib: LibraryDb): seq[Track] = @[]
+  proc searchTracks*(lib: LibraryDb, query: string): seq[Track] = @[]
   proc loadArtists*(lib: LibraryDb): seq[ArtistEnt] = @[]
   proc loadAlbums*(lib: LibraryDb): seq[AlbumEnt] = @[]
   proc loadPlaylists*(lib: LibraryDb): seq[UserPlaylist] = @[]
