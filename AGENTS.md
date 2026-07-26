@@ -65,3 +65,17 @@ NIMWAVE_PATH="$HOME/.nimble/pkgs/nimwave-1.2.1" ILLWAVE_PATH="$HOME/.nimble/pkgs
 - Removed unused imports (`random` from gtm.nim, `terminal` from icons.nim)
 
 ### All tasks complete — no remaining blockers
+
+## Loop Engineering
+
+This repo uses loop engineering patterns. See:
+- `STATE.md` — current loop memory
+- `LOOP.md` — active loops and cadence
+- `loop-budget.md` — token caps
+- `loop-constraints.md` — binding agent rules
+- `loop-run-log.md` — run history
+- `gate.yaml` — path denylist + auto-merge allowlist
+- `skills/` — triage and verifier skills
+
+Start a loop: `opencode run "Run loop-triage. Update STATE.md."`
+Verify changes: `opencode run "Verify diff in worktree" --agent verifier`
