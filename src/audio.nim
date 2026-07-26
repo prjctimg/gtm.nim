@@ -82,6 +82,7 @@ method startCrossfade*(b: AudioBackend, durationSeconds: float, reverse: bool = 
 method getStatusFlags*(b: AudioBackend): tuple[crossfading, masterEnded: bool] {.base.} = (false, false)
 method setEqBand*(b: AudioBackend, band: int, gainDb: float) {.base.} = discard
 method setEqPreset*(b: AudioBackend, name: string) {.base.} = discard
+method setEqEnabled*(b: AudioBackend, enabled: bool) {.base.} = discard
 method setCrossfadeCurve*(b: AudioBackend, curveType: int) {.base.} = discard
 
 when defined(useFFmpeg):

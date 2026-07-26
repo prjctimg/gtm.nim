@@ -276,7 +276,7 @@ proc sendAsync*(cli: DaemonClient, cmd: JsonNode, callback: proc(resp: JsonNode)
 
 method loadFile*(cli: DaemonClient, path: string, title: string = "", channel: string = "") =
   cli.ensureDaemon()
-  let resp = sendDaemonCmd(cli, %*{"cmd": "load_file", "path": path, "title": title, "channel": channel})
+  let resp = sendDaemonCmd(cli, %*{"cmd": "play", "path": path, "title": title, "channel": channel})
   cli.lastTrackId = 0
   if resp.hasKey("track_id"):
     cli.lastTrackId = resp["track_id"].getInt().int64
@@ -289,8 +289,7 @@ method loadFile*(cli: DaemonClient, path: string, title: string = "", channel: s
     cli.state = (if s == "playing": 1 elif s == "paused": 2 else: 0)
 
 method play*(cli: DaemonClient) =
-  cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "play"})
+  discard
 
 method pause*(cli: DaemonClient) =
   cli.ensureDaemon()
@@ -302,7 +301,7 @@ method stop*(cli: DaemonClient) =
 
 method seek*(cli: DaemonClient, seconds: float) =
   cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "seek", "seconds": seconds})
+  cli.sendOnly(%*{"cmd": "seek", "position_secs": seconds})
 
 method setVolume*(cli: DaemonClient, vol: int) =
   cli.ensureDaemon()
@@ -310,33 +309,39 @@ method setVolume*(cli: DaemonClient, vol: int) =
   cli.sendOnly(%*{"cmd": "set_volume", "volume": vol})
 
 method prepareNext*(cli: DaemonClient, path: string) =
-  cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "prepare_next", "path": path})
+  discard
 
 method getStatusFlags*(cli: DaemonClient): tuple[crossfading, masterEnded: bool] =
   cli.ensureDaemon()
-  let resp = daemonSimpleCmd(cli, "status")
+  let resp = daemonSimpleCmd(cli, "get_status")
   (resp{"crossfading"}.getBool(false), resp{"master_ended"}.getBool(false))
 
 proc startCrossfade*(cli: DaemonClient, durationSeconds: float) =
   cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "crossfade", "duration": durationSeconds})
+  cli.sendOnly(%*{"cmd": "crossfade", "enabled": true, "duration_secs": durationSeconds, "easing": "equal_power"})
 
 method setEqBand*(cli: DaemonClient, band: int, gainDb: float) =
-  cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "set_eq_band", "band": band, "gain_db": gainDb})
+  discard
 
 method setEqPreset*(cli: DaemonClient, name: string) =
   cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "set_eq_preset", "name": name})
+  cli.sendOnly(%*{"cmd": "set_eq_preset", "preset": name})
+
+method setEqEnabled*(cli: DaemonClient, enabled: bool) =
+  cli.ensureDaemon()
+  cli.sendOnly(%*{"cmd": "set_eq_enabled", "enabled": enabled})
 
 method setCrossfadeCurve*(cli: DaemonClient, curveType: int) =
   cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "set_crossfade_curve", "curve_type": curveType})
+  let easing = case curveType
+    of 0: "linear"
+    of 2: "exponential"
+    else: "equal_power"
+  cli.sendOnly(%*{"cmd": "crossfade", "enabled": true, "duration_secs": 5, "easing": easing})
 
 method togglePause*(cli: DaemonClient) =
   cli.ensureDaemon()
-  cli.sendOnly(%*{"cmd": "toggle_pause"})
+  cli.sendOnly(%*{"cmd": "play_pause"})
 
 method pollEvents*(cli: DaemonClient): seq[AudioEvent] =
   result = cli.drainedEvents
@@ -467,23 +472,43 @@ proc getPlaylistTracks*(cli: DaemonClient, playlistId: int64): JsonNode =
 
 proc setShuffle*(cli: DaemonClient, enabled: bool): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "set_shuffle", "enabled": enabled.int})
+  sendDaemonCmd(cli, %*{"cmd": "toggle_shuffle"})
 
 proc setRepeat*(cli: DaemonClient, mode: int): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "set_repeat", "mode": mode})
+  let modeStr = case mode
+    of 2: "one"
+    of 1: "all"
+    else: "off"
+  sendDaemonCmd(cli, %*{"cmd": "cycle_repeat", "mode": modeStr})
 
 proc setSleepTimer*(cli: DaemonClient, minutes: int): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "set_sleep_timer", "minutes": minutes})
 
+proc cancelSleepTimer*(cli: DaemonClient): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "cancel_sleep_timer"})
+
 proc getDaemonState*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "get_state"})
+  sendDaemonCmd(cli, %*{"cmd": "get_status"})
 
 proc resumePlayback*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "resume"})
+  sendDaemonCmd(cli, %*{"cmd": "play_pause"})
+
+proc toggleMute*(cli: DaemonClient): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "toggle_mute"})
+
+proc search*(cli: DaemonClient, query: string): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "search", "query": query})
+
+proc checkHealth*(cli: DaemonClient): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "check_health"})
 
 proc getLibrary*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
@@ -512,10 +537,6 @@ proc queueRemove*(cli: DaemonClient, index: int): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "queue_remove", "index": index})
 
-proc queueRemovePath*(cli: DaemonClient, path: string): JsonNode =
-  cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "queue_remove_path", "path": path})
-
 proc queueClear*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "queue_clear"})
@@ -523,6 +544,15 @@ proc queueClear*(cli: DaemonClient): JsonNode =
 proc queueList*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "queue_list"})
+
+proc queueRemovePath*(cli: DaemonClient, path: string): JsonNode =
+  let listResp = queueList(cli)
+  if listResp.hasKey("queue"):
+    let q = listResp["queue"]
+    for i in 0..<q.len:
+      if q[i].getStr() == path:
+        return queueRemove(cli, i)
+  result = %*{"ok": true}
 
 proc queueSetCursor*(cli: DaemonClient, index: int): JsonNode =
   cli.ensureDaemon()
@@ -542,7 +572,7 @@ proc getFavouritesFromDaemon*(cli: DaemonClient): JsonNode =
 
 proc getFullState*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "get_full_state"})
+  sendDaemonCmd(cli, %*{"cmd": "get_status"})
 
 proc ytSearch*(cli: DaemonClient, query: string, pageSize: int = 10) =
   cli.ensureDaemon()

@@ -82,9 +82,9 @@ suite "Daemon command construction":
     check cmd["id"].getInt(0) == 1
     check cmd["cmd"].getStr("") == "play"
 
-  test "load_file command":
-    let cmd = %*{"cmd": "load_file", "path": "/tmp/test.mp3", "id": 2}
-    check cmd["cmd"].getStr("") == "load_file"
+  test "play command with path":
+    let cmd = %*{"cmd": "play", "path": "/tmp/test.mp3", "id": 2}
+    check cmd["cmd"].getStr("") == "play"
     check cmd["path"].getStr("") == "/tmp/test.mp3"
     check cmd["id"].getInt(0) == 2
 
@@ -94,13 +94,12 @@ suite "Daemon command construction":
     check cmd["id"].getInt(0) == 3
 
   test "seek command":
-    let cmd = %*{"cmd": "seek", "seconds": 30.5, "id": 4}
-    check cmd["seconds"].getFloat(0.0) == 30.5
+    let cmd = %*{"cmd": "seek", "position_secs": 30.5, "id": 4}
+    check cmd["position_secs"].getFloat(0.0) == 30.5
 
-  test "set_eq_band command":
-    let cmd = %*{"cmd": "set_eq_band", "band": 3, "gain_db": -2.5, "id": 5}
-    check cmd["band"].getInt(0) == 3
-    check cmd["gain_db"].getFloat(0.0) == -2.5
+  test "set_eq_preset command":
+    let cmd = %*{"cmd": "set_eq_preset", "preset": "rock", "id": 5}
+    check cmd["preset"].getStr("") == "rock"
 
 suite "Response parsing":
   test "parse ok response":

@@ -140,14 +140,14 @@ proc execSubcommand*(args: CliArgs): bool =
     discard cli.setSleepTimer(args.sleepMinutes)
     echo "Sleep timer: ", args.sleepMinutes, " minutes"
   of scStatus:
-    let resp = simpleDaemonCmd("status")
+    let resp = simpleDaemonCmd("get_status")
     echo "State: ", resp{"state"}.getStr("unknown")
     echo "Track: ", resp{"track"}.getStr("")
     echo "Volume: ", resp{"volume"}.getInt(80)
     echo "Time: ", formatTime(resp{"time_pos"}.getFloat(0.0))
     echo "Duration: ", formatTime(resp{"duration"}.getFloat(0.0))
   of scNow:
-    let resp = simpleDaemonCmd("now_playing")
+    let resp = simpleDaemonCmd("get_status")
     echo "Now Playing:"
     echo "  Track: ", resp{"track"}.getStr("")
     echo "  State: ", resp{"state"}.getStr("unknown")
