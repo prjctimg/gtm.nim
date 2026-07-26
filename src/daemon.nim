@@ -267,6 +267,16 @@ proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): seq[string] =
     of aekTrackEnded: discard
     of aekMetadataChanged:
       if ev.strVal.len > 0: obj["name"] = %ev.strVal
+    of aekShuffleChanged: obj["enabled"] = %ev.intVal
+    of aekRepeatModeChanged: obj["mode"] = %ev.strVal
+    of aekQueueIndexChanged: obj["index"] = %ev.intVal
+    of aekCrossfadeChanged:
+      obj["enabled"] = %ev.intVal
+      obj["duration_secs"] = %ev.floatVal
+    of aekEqPresetChanged: obj["preset"] = %ev.strVal
+    of aekEqEnabledChanged: obj["enabled"] = %ev.intVal
+    of aekSleepTimerTick: obj["remaining_secs"] = %ev.intVal
+    of aekSleepTimerExpired: discard
     else: discard
     result.add($obj)
 
@@ -899,10 +909,15 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       d.crossfadeDuration = 0
     result["crossfade_enabled"] = %(d.crossfadeDuration > 0)
     result["crossfade_duration"] = %d.crossfadeDuration
+    d.broadcastEvent(%*{"event": "crossfade_changed",
+      "enabled": %(d.crossfadeDuration > 0),
+      "duration_secs": %d.crossfadeDuration})
   of dckSetEqPreset:
     d.player.setEqPreset(cmd.strArg)
+    d.broadcastEvent(%*{"event": "eq_preset_changed", "preset": %cmd.strArg})
   of dckSetEqEnabled:
     d.player.setEqEnabled(cmd.intArg != 0)
+    d.broadcastEvent(%*{"event": "eq_enabled_changed", "enabled": %(cmd.intArg != 0)})
   of dckQueue:
     if cmdJson != nil:
       return d.executeQueueCommand(cmd.strArg, cmdJson)
@@ -921,19 +936,30 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       d.shuffleOrder = shuffleOrder(d.playbackQueue.len)
       d.shuffleIndex = 0
     result["shuffle"] = %d.shuffleEnabled
+    d.broadcastEvent(%*{"event": "shuffle_changed", "enabled": %d.shuffleEnabled})
     when defined(useMpris):
       emitMprisPlayerChanged(d)
   of dckCycleRepeat:
     d.repeatMode = cmd.intArg
     result["repeat"] = %d.repeatMode
+    let modeStr = case d.repeatMode
+      of 2: "one"
+      of 1: "all"
+      else: "off"
+    d.broadcastEvent(%*{"event": "repeat_mode_changed", "mode": %modeStr})
     when defined(useMpris):
       emitMprisPlayerChanged(d)
   of dckSetSleepTimer:
     d.sleepTimerRemaining = cmd.intArg
     result["sleep_timer"] = %d.sleepTimerRemaining
+    if d.sleepTimerRemaining > 0:
+      d.broadcastEvent(%*{"event": "sleep_timer_tick", "remaining_secs": %d.sleepTimerRemaining})
   of dckCancelSleepTimer:
+    let wasActive = d.sleepTimerRemaining > 0
     d.sleepTimerRemaining = 0
     result["sleep_timer"] = %0
+    if wasActive:
+      d.broadcastEvent(%*{"event": "sleep_timer_expired"})
   of dckQueueSetCursor:
     d.shuffleIndex = cmd.intArg
     result["cursor"] = %d.shuffleIndex
@@ -1635,6 +1661,7 @@ proc runDaemon*() =
         daemon.sleepTimerFrames = 0
         daemon.sleepTimerRemaining.dec
         if daemon.sleepTimerRemaining <= 0:
+          daemon.broadcastEvent(%*{"event": "sleep_timer_expired"})
           daemon.savePlaybackState()
           when defined(useMpris):
             shutdownMpris()
@@ -1643,6 +1670,8 @@ proc runDaemon*() =
           daemon.player.shutdown()
           daemon.running = false
           break
+        else:
+          daemon.broadcastEvent(%*{"event": "sleep_timer_tick", "remaining_secs": %daemon.sleepTimerRemaining})
     daemon.persistFrames.inc
     if signalFlag:
       if debugMode: stderr.writeLine("[gtm] signal received, graceful shutdown")

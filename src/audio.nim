@@ -7,7 +7,10 @@ type
     aekNone, aekPlaybackStarted, aekPlaybackPaused, aekPlaybackStopped,
     aekTrackEnded, aekPositionChanged, aekDurationChanged,
     aekVolumeChanged, aekMetadataChanged, aekError,
-    aekCustomEvent, aekQueueChanged, aekHeartbeat
+    aekCustomEvent, aekQueueChanged, aekHeartbeat,
+    aekShuffleChanged, aekRepeatModeChanged, aekQueueIndexChanged,
+    aekCrossfadeChanged, aekEqPresetChanged, aekEqEnabledChanged,
+    aekSleepTimerTick, aekSleepTimerExpired
 
   AudioEvent* = object
     kind*: AudioEventKind
@@ -57,6 +60,14 @@ proc eventName*(k: AudioEventKind): string =
   of aekCustomEvent: "custom"
   of aekQueueChanged: "queue_changed"
   of aekHeartbeat: "heartbeat"
+  of aekShuffleChanged: "shuffle_changed"
+  of aekRepeatModeChanged: "repeat_mode_changed"
+  of aekQueueIndexChanged: "queue_index_changed"
+  of aekCrossfadeChanged: "crossfade_changed"
+  of aekEqPresetChanged: "eq_preset_changed"
+  of aekEqEnabledChanged: "eq_enabled_changed"
+  of aekSleepTimerTick: "sleep_timer_tick"
+  of aekSleepTimerExpired: "sleep_timer_expired"
 
 proc parseEventName*(s: string): AudioEventKind =
   case s
@@ -72,6 +83,14 @@ proc parseEventName*(s: string): AudioEventKind =
   of "custom": aekCustomEvent
   of "queue_changed": aekQueueChanged
   of "heartbeat": aekHeartbeat
+  of "shuffle_changed": aekShuffleChanged
+  of "repeat_mode_changed": aekRepeatModeChanged
+  of "queue_index_changed": aekQueueIndexChanged
+  of "crossfade_changed": aekCrossfadeChanged
+  of "eq_preset_changed": aekEqPresetChanged
+  of "eq_enabled_changed": aekEqEnabledChanged
+  of "sleep_timer_tick": aekSleepTimerTick
+  of "sleep_timer_expired": aekSleepTimerExpired
   else: aekNone
 method pollEvents*(b: AudioBackend): seq[AudioEvent] {.base.} = @[]
 method shutdown*(b: AudioBackend) {.base.} = discard
@@ -206,7 +225,7 @@ when defined(useFFmpeg):
       result.add(AudioEvent(kind: aekPlaybackStopped))
     elif b.lastState == 0 and nowState == 1:
       result.add(AudioEvent(kind: aekPlaybackStarted))
-    if nowState == 1 and abs(nowTime - b.lastTime) >= 1.0:
+    if nowState == 1 and abs(nowTime - b.lastTime) >= 0.5:
       result.add(AudioEvent(kind: aekPositionChanged, floatVal: nowTime))
       b.lastTime = nowTime
     b.lastPlaying = nowPlaying
@@ -358,7 +377,7 @@ when defined(useFFmpeg):
       result.add(AudioEvent(kind: aekPlaybackStopped))
     elif b.lastState == 0 and nowState == 1:
       result.add(AudioEvent(kind: aekPlaybackStarted))
-    if nowState == 1 and abs(nowTime - b.lastTime) >= 1.0:
+    if nowState == 1 and abs(nowTime - b.lastTime) >= 0.5:
       result.add(AudioEvent(kind: aekPositionChanged, floatVal: nowTime))
       b.lastTime = nowTime
     if nowCrossfading and not b.lastCrossfading:
