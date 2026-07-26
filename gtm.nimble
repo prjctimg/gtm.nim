@@ -4,7 +4,7 @@ author      = "prjctimg"
 description = "Terminal music player based on FFmpeg and nimwave. "
 license     = "MIT"
 srcDir      = "src"
-bin         = @["gtm"]
+bin         = @["gtm", "gtmd"]
 
 # nimlanguageserver entry points - tells nimsuggest which files are project roots
 entryPoints = @["src/gtm.nim"]
