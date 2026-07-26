@@ -442,33 +442,31 @@ proc sendQuitDaemon*(cli: DaemonClient) =
 
 proc createPlaylist*(cli: DaemonClient, name: string): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "create_playlist", "name": name})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "create_playlist", "name": name})
 
 proc deletePlaylist*(cli: DaemonClient, playlistId: int64): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "delete_playlist", "playlist_id": playlistId})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "delete_playlist", "id": playlistId})
 
 proc renamePlaylist*(cli: DaemonClient, playlistId: int64, name: string): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "rename_playlist", "playlist_id": playlistId, "name": name})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "rename_playlist", "playlist_id": playlistId, "name": name})
 
 proc addToPlaylist*(cli: DaemonClient, playlistId, trackId: int64, position: int = 0): JsonNode =
   cli.ensureDaemon()
-  let data = %*{"playlist_id": playlistId, "track_id": trackId, "position": position}
-  sendDaemonCmd(cli, %*{"cmd": "add_to_playlist", "data": data})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "add_to_playlist", "playlist_id": playlistId, "track_ids": [trackId], "position": position})
 
 proc removeFromPlaylist*(cli: DaemonClient, playlistId, trackId: int64): JsonNode =
   cli.ensureDaemon()
-  let data = %*{"playlist_id": playlistId, "track_id": trackId}
-  sendDaemonCmd(cli, %*{"cmd": "remove_from_playlist", "data": data})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "remove_from_playlist", "playlist_id": playlistId, "track_id": trackId})
 
 proc listPlaylists*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "list_playlists"})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "get_playlists"})
 
 proc getPlaylistTracks*(cli: DaemonClient, playlistId: int64): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "get_playlist_tracks", "playlist_id": playlistId})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "get_playlist_tracks", "playlist_id": playlistId})
 
 proc setShuffle*(cli: DaemonClient, enabled: bool): JsonNode =
   cli.ensureDaemon()
@@ -512,38 +510,41 @@ proc checkHealth*(cli: DaemonClient): JsonNode =
 
 proc getLibrary*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "get_library"})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "get_tracks"})
 
 proc addTrack*(cli: DaemonClient, data: JsonNode): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "add_track", "data": data})
+  var params = %*{"cmd": "library", "action": "add_track"}
+  for k, v in data:
+    params[k] = v
+  sendDaemonCmd(cli, params)
 
 proc updateTrackPath*(cli: DaemonClient, oldPath, newPath, newTitle: string): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "update_track_path", "data": {"old_path": oldPath, "new_path": newPath, "title": newTitle}})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "update_metadata", "old_path": oldPath, "new_path": newPath, "title": newTitle})
 
 proc scanDir*(cli: DaemonClient, path: string): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "scan", "path": path})
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "scan", "path": path})
 
 proc queueAdd*(cli: DaemonClient, items: seq[tuple[path, title, channel: string]]): JsonNode =
   cli.ensureDaemon()
-  var arr = newJArray()
+  var paths = newJArray()
   for (path, title, channel) in items:
-    arr.add(%*{"path": path, "title": title, "channel": channel})
-  sendDaemonCmd(cli, %*{"cmd": "queue_add", "data": arr})
+    paths.add(%*{"path": path, "title": title, "channel": channel})
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "add_many", "paths": paths})
 
 proc queueRemove*(cli: DaemonClient, index: int): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "queue_remove", "index": index})
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "remove", "index": index})
 
 proc queueClear*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "queue_clear"})
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "clear"})
 
 proc queueList*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "queue_list"})
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "list"})
 
 proc queueRemovePath*(cli: DaemonClient, path: string): JsonNode =
   let listResp = queueList(cli)
