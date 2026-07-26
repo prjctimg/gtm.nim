@@ -205,7 +205,7 @@ when defined(useFFmpeg):
       result.add(AudioEvent(kind: aekPlaybackStopped))
     elif b.lastState == 0 and nowState == 1:
       result.add(AudioEvent(kind: aekPlaybackStarted))
-    if nowState == 1 and abs(nowTime - b.lastTime) > 1.0:
+    if nowState == 1 and abs(nowTime - b.lastTime) >= 1.0:
       result.add(AudioEvent(kind: aekPositionChanged, floatVal: nowTime))
       b.lastTime = nowTime
     b.lastPlaying = nowPlaying
@@ -357,7 +357,7 @@ when defined(useFFmpeg):
       result.add(AudioEvent(kind: aekPlaybackStopped))
     elif b.lastState == 0 and nowState == 1:
       result.add(AudioEvent(kind: aekPlaybackStarted))
-    if nowState == 1 and abs(nowTime - b.lastTime) > 1.0:
+    if nowState == 1 and abs(nowTime - b.lastTime) >= 1.0:
       result.add(AudioEvent(kind: aekPositionChanged, floatVal: nowTime))
       b.lastTime = nowTime
     if nowCrossfading and not b.lastCrossfading:
