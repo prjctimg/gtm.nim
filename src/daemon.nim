@@ -64,6 +64,7 @@ type
     lib: LibraryDb
     running: bool
     server: Socket
+    state*: DaemonState
     clients*: seq[ClientState]
     currentTrackPath: string
     currentTrackTitle: string
@@ -350,6 +351,7 @@ proc savePlaybackState(d: Daemon) =
     for p in d.playbackQueue:
       qArr.add(%p)
     d.lib.setPlaybackState("queue_json", $qArr)
+  d.state.saveDaemonState()
 
 
 proc gracefulShutdown(d: Daemon) =
@@ -896,6 +898,56 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
     for p in d.playbackQueue:
       qArr.add(%p)
     result["queue"] = qArr
+    # Full spec DaemonState object
+    d.state.version = d.state.version + 1
+    d.state.status = case d.player.state
+      of 1: psPlaying
+      of 2: psPaused
+      else: psStopped
+    d.state.volume = d.player.volume
+    d.state.shuffle = d.shuffleEnabled
+    d.state.repeat = case d.repeatMode
+      of 2: "one"
+      of 1: "all"
+      else: "off"
+    d.state.timePos = d.player.timePos
+    d.state.duration = d.player.duration
+    d.state.sleepTimer = d.sleepTimerRemaining
+    d.state.crossfade.enabled = d.crossfadeDuration > 0
+    d.state.crossfade.durationSecs = d.crossfadeDuration
+    d.state.crossfade.easing = case d.crossfadeCurve
+      of 0: "linear"
+      of 2: "exponential"
+      else: "equal_power"
+    d.state.queue = d.playbackQueue
+    d.state.queueCursor = uint64(max(0, d.shuffleIndex))
+    d.state.currentTrack = TrackInfo(
+      id: d.currentTrackPath,
+      title: if d.currentTrackTitle.len > 0: d.currentTrackTitle
+             elif d.player.metadata.title.len > 0: d.player.metadata.title
+             else: splitFile(d.currentTrackPath).name,
+      artist: if d.currentTrackChannel.len > 0: d.currentTrackChannel
+              else: d.player.metadata.artist,
+      path: d.currentTrackPath,
+      duration: d.player.duration
+    )
+    result["daemon_state"] = %*{
+      "version": d.state.version,
+      "status": $d.state.status,
+      "volume": d.state.volume,
+      "shuffle": d.state.shuffle,
+      "repeat": d.state.repeat,
+      "time_pos": d.state.timePos,
+      "duration": d.state.duration,
+      "sleep_timer": d.state.sleepTimer,
+      "crossfade": %*{"enabled": d.state.crossfade.enabled,
+        "duration_secs": d.state.crossfade.durationSecs,
+        "easing": d.state.crossfade.easing},
+      "eq_preset": d.state.eqPreset,
+      "eq_enabled": d.state.eqEnabled,
+      "queue": qArr,
+      "queue_cursor": d.state.queueCursor
+    }
   of dckCrossfade:
     let enabled = cmd.intArg != 0
     if enabled:
@@ -1307,6 +1359,26 @@ proc runDaemon*() =
         if daemon.lib.findTrackByPath(p) == 0:
           let (ftitle, fartist) = parseFilenameForMetadata(p)
           discard daemon.lib.addTrack(p, ftitle, fartist, "", 0.0, 0, 0, "")
+  # Sync DaemonState from restored fields
+  daemon.state.version = 0
+  daemon.state.status = case daemon.player.state
+    of 1: psPlaying
+    of 2: psPaused
+    else: psStopped
+  daemon.state.volume = daemon.player.volume
+  daemon.state.shuffle = daemon.shuffleEnabled
+  daemon.state.repeat = case daemon.repeatMode
+    of 2: "one"
+    of 1: "all"
+    else: "off"
+  daemon.state.crossfade.enabled = daemon.crossfadeDuration > 0
+  daemon.state.crossfade.durationSecs = daemon.crossfadeDuration
+  daemon.state.crossfade.easing = case daemon.crossfadeCurve
+    of 0: "linear"
+    of 2: "exponential"
+    else: "equal_power"
+  daemon.state.queue = daemon.playbackQueue
+  daemon.state.queueCursor = uint64(max(0, daemon.shuffleIndex))
   removeFile(sockPath())
   let srvFd = posix.socket(posix.AF_UNIX, posix.SOCK_STREAM, 0)
   daemon.server = newSocket(srvFd, Domain.AF_UNIX, SockType.SOCK_STREAM)
