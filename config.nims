@@ -2,9 +2,10 @@ import os, strutils
 
 switch("define", "gtm")
 switch("outdir", "bin")
-switch("define", "useFFmpeg")
 switch("define", "useSqlite")
 switch("define", "ssl")
+when defined(linux):
+  switch("define", "useFFmpeg")
 
 let projectDir = currentSourcePath().parentDir()
 
