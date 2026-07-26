@@ -150,6 +150,22 @@ proc drainEventLines(cli: DaemonClient, buf: var string) =
         if j.hasKey("cursor"):
           ev.intVal = j["cursor"].getInt(0)
       of aekHeartbeat: discard
+      of aekShuffleChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
+      of aekRepeatModeChanged:
+        ev.strVal = j{"mode"}.getStr("off")
+      of aekQueueIndexChanged:
+        ev.intVal = j{"index"}.getInt(0)
+      of aekCrossfadeChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
+        ev.floatVal = j{"duration_secs"}.getFloat(0.0)
+      of aekEqPresetChanged:
+        ev.strVal = j{"preset"}.getStr("")
+      of aekEqEnabledChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
+      of aekSleepTimerTick:
+        ev.intVal = j{"remaining_secs"}.getInt(0)
+      of aekSleepTimerExpired: discard
       of aekCustomEvent:
         ev.strVal = j{"name"}.getStr("")
         if j.hasKey("shuffleIndex"):
