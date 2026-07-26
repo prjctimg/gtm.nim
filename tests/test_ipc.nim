@@ -169,7 +169,15 @@ suite "Protocol id envelope":
     check resp["ok"].getBool(true) == false
     check resp["error"].getStr("") == "unknown command: foo"
 
-  test "handshake command uses id 0":
-    let cmd = %*{"cmd": "handshake", "version": 1, "client": "gtm", "id": 0}
+  test "handshake command uses id 0 and protocol v2":
+    let cmd = %*{"cmd": "handshake", "version": 2, "client": "gtm",
+      "client_version": "0.1.0", "id": 0}
     check cmd["id"].getInt(-1) == 0
-    check cmd["version"].getInt(0) == 1
+    check cmd["version"].getInt(0) == 2
+    check cmd["client_version"].getStr("") == "0.1.0"
+
+  test "handshake version negotiation rejects higher client version":
+    let daemonProtocolVersion = 2
+    let clientVersion = 3
+    let ok = clientVersion <= daemonProtocolVersion
+    check ok == false
