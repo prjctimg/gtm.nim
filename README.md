@@ -1,114 +1,44 @@
-# gtm
+# gtm.nim 👑
 
-A terminal-based music player with tabbed interface, daemon architecture, and comprehensive library management.
+[![Version](https://img.shields.io/github/v/release/prjctimg/gtm)](https://github.com/prjctimg/gtm/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Nim 2.0+](https://img.shields.io/badge/nim-2.0+-orange.svg)](https://nim-lang.org)
 
-## Features
+Terminal music player with YouTube integration, crossfade, and loudness compensation. Nim implementation of the GTM protocol.
 
-- **Daemon Architecture**: Background playback daemon with TUI client
-- **Tabbed Interface**: Now Playing, Library, Playlists, Settings tabs
-- **Command Palette**: Fuzzy-search commands with `:`
-- **Leader Key**: Space shows context menu; double-tap toggles play/pause
-- **Select Mode**: Vim-style visual selection + per-item toggle
-- **Library Management**: SQLite-backed track/artist/album/playlist database
-- **Audio Backend**: FFmpeg + ALSA — system libraries, full format support
-- **Visualizer**: Real-time FFT spectrum analyzer via shared memory
-- **11 Themes**: Catppuccin (4), Gruvbox (2), Dracula, Tokyo Night (2), Ayu (2)
-- **Responsive Layout**: Adapts to terminal width (≥120, 60–119, 40–59 cols)
-- **Nerd Font Icons**: Auto-detected with emoji fallback
-- **Configurable**: JSON config with JSON Schema validation
-- **Remote Control**: CLI commands for daemon control (`gtm play`, `gtm pause`, etc.)
-
-## Quick Start
+## Install
 
 ```bash
-gtm ~/Music           # Launch TUI with music directory
-gtm play              # If daemon is running, resume playback
+curl -fsSL https://raw.githubusercontent.com/prjctimg/gtm/main/install.sh | bash
+```
+
+## CLI Subcommands
+
+```
+gtm play [file]       # Play a file or URL
+gtm pause             # Toggle play/pause
+gtm stop              # Stop playback
+gtm next              # Skip to next track
+gtm prev              # Go to previous track
+gtm volume [0-100]    # Get/set volume
+gtm shuffle           # Toggle shuffle mode
+gtm repeat [0-2]      # Set repeat mode (0=none, 1=all, 2=one)
+gtm sleep [minutes]   # Set sleep timer
+gtm status            # Show playback status
+gtm now               # Show current track info
+gtm kill              # Stop the daemon process
 gtm daemon            # Start daemon manually
+gtm help              # Show help
+gtm version           # Show version
 ```
 
-## Keybindings
+## Links
 
-| Key | Action |
-|-----|--------|
-| `Space` | Leader key (hold for menu) |
-| `Space Space` | Toggle play/pause |
-| `s` | Stop |
-| `h` / `l` | Seek backward/forward 5s |
-| `j` / `k` | Navigate up/down |
-| `1`-`4` | Switch tabs |
-| `:` | Open command palette |
-| `/` | Filter items |
-| `v` | Toggle select mode |
-| `?` | Help |
-| `q` | Quit |
+- **Full specification**: [gtm.spec](https://github.com/prjctimg/gtm.spec)
+- **Protocol**: [protocol.md](https://github.com/prjctimg/gtm.spec/blob/main/protocol.md)
+- **Configuration**: [gtm-config(1)](https://github.com/prjctimg/gtm.spec/blob/main/man/gtm-config.1.md)
+- **Keybindings**: [gtm-keybindings(1)](https://github.com/prjctimg/gtm.spec/blob/main/man/gtm-keybindings.1.md)
 
-## Tabs
+## License
 
-1. **Now Playing** — Current track info, progress bar, status
-2. **Library** — Browse by tracks, artists, or albums
-3. **Playlists** — Manage saved playlists
-4. **Settings** — Theme selection, volume, visualizer toggle
-
-## Installation
-
-```bash
-nim c -d:release src/gtm.nim
-cp bin/gtm ~/.local/bin/
-```
-
-## Configuration
-
-`~/.config/gtm/config.json` (see `config.schema.json`):
-
-```json
-{
-  "theme": "mocha",
-  "volume": 80,
-  "idle_timeout": 300,
-  "visualizer": { "enabled": true, "bar_count": 32 }
-}
-```
-
-## Requirements
-
-- Nim >= 2.0.0
-- Linux with `/dev/shm` (for visualizer)
-- Terminal with true color support recommended
-
-## Development
-
-```bash
-nim c -d:release src/gtm.nim              # release build
-nim check src/gtm.nim                      # syntax check
-```
-
-## Architecture
-
-```
-┌──────────┐    Unix socket     ┌──────────┐
-│  gtm TUI  │◄─────────────────►│  gtm-d   │
-│  (client) │    JSON IPC       │ (daemon) │
-└──────────┘                    └──────────┘
-                                      │
-                               ┌──────┴──────┐
-                                │ ffmpeg + alsa│
-                                │  (playback)  │
-                               └──────┬──────┘
-                                      │ PCM via
-                                      │ shm/mmap
-                               ┌──────┴──────┐
-                               │  visualizer  │
-                               │  (FFT bars)  │
-                               └─────────────┘
-```
-
----
-
-> ## License 📜
-
-> (c) 2026, [prjctimg](https://prjctimg.me)
->
-> This is free software, released under the GPL-3.0 license.
-
----
----
+GPL-3.0 — © 2026 [prjctimg](https://prjctimg.me)
