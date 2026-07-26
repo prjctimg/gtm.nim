@@ -7,7 +7,7 @@ type
     aekNone, aekPlaybackStarted, aekPlaybackPaused, aekPlaybackStopped,
     aekTrackEnded, aekPositionChanged, aekDurationChanged,
     aekVolumeChanged, aekMetadataChanged, aekError,
-    aekCustomEvent
+    aekCustomEvent, aekQueueChanged, aekHeartbeat
 
   AudioEvent* = object
     kind*: AudioEventKind
@@ -55,6 +55,8 @@ proc eventName*(k: AudioEventKind): string =
   of aekMetadataChanged: "metadata_changed"
   of aekError: "error"
   of aekCustomEvent: "custom"
+  of aekQueueChanged: "queue_changed"
+  of aekHeartbeat: "heartbeat"
 
 proc parseEventName*(s: string): AudioEventKind =
   case s
@@ -68,6 +70,8 @@ proc parseEventName*(s: string): AudioEventKind =
   of "metadata_changed": aekMetadataChanged
   of "error": aekError
   of "custom": aekCustomEvent
+  of "queue_changed": aekQueueChanged
+  of "heartbeat": aekHeartbeat
   else: aekNone
 method pollEvents*(b: AudioBackend): seq[AudioEvent] {.base.} = @[]
 method shutdown*(b: AudioBackend) {.base.} = discard

@@ -5,6 +5,8 @@ import msgpack4nim/msgpack2json
 proc prctl(option: cint, arg2: cstring): cint {.importc, header: "<sys/prctl.h>".}
 import audio, state, library, ytdlp
 
+var signalFlag* {.threadvar.}: bool
+
 proc parseFilenameForMetadata(path: string): tuple[title, artist: string] =
   let (_, stem, _) = path.splitFile()
   result = (stem, "")
@@ -41,7 +43,8 @@ type
     dckListEqPresets,
     dckSetCrossfadeCurve,
     dckPing,
-    dckHandshake
+    dckHandshake,
+    dckUnknown
 
   DaemonCmd* = object
     kind*: DaemonCmdKind
@@ -138,8 +141,7 @@ proc removePidFile() =
 
 proc setupSignalHandlers() =
   proc handler(sig: cint) {.noconv.} =
-    removePidFile()
-    quit(0)
+    signalFlag = true
   signal(SIGINT, handler)
   signal(SIGTERM, handler)
 
@@ -262,9 +264,12 @@ proc parseDaemonCommand(line: string): DaemonCmd =
       result.kind = dckPing
     of "handshake":
       result.kind = dckHandshake
-    else: result.kind = dckStatus
+    else:
+      result.kind = dckUnknown
+      result.strArg = cmd
   except CatchableError:
-    result.kind = dckStatus
+    result.kind = dckUnknown
+    result.strArg = "<malformed>"
 
 proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): seq[string] =
   result = @[]
@@ -350,7 +355,6 @@ proc sendQueueEvent(d: Daemon) =
 proc savePlaybackState(d: Daemon) =
   if d.lib != nil:
     d.lib.setPlaybackState("volume", $d.player.volume)
-    d.lib.setPlaybackState("time_pos", $d.player.timePos)
     d.lib.setPlaybackState("track_path", d.currentTrackPath)
     d.lib.setPlaybackState("track_title", d.currentTrackTitle)
     d.lib.setPlaybackState("track_channel", d.currentTrackChannel)
@@ -368,6 +372,18 @@ proc savePlaybackState(d: Daemon) =
     for p in d.playbackQueue:
       qArr.add(%p)
     d.lib.setPlaybackState("queue_json", $qArr)
+
+
+proc gracefulShutdown(d: Daemon) =
+  if not d.running: return
+  d.savePlaybackState()
+  when defined(useMpris):
+    shutdownMpris()
+  if d.lib != nil:
+    d.lib.closeDb()
+  if d.player != nil:
+    d.player.shutdown()
+  d.running = false
 
 
 proc shuffleOrder(count: int): seq[int] =
@@ -1073,6 +1089,9 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
     result["version"] = %1
     result["daemon"] = %"gtmd-nim"
     result["daemon_version"] = %"0.1.0"
+  of dckUnknown:
+    result["ok"] = %false
+    result["error"] = %("unknown command: " & cmd.strArg)
 
 
 proc trySend(client: Socket, data: string): bool =
@@ -1307,8 +1326,18 @@ proc runDaemon*() =
               let line = daemon.clients[ci].buf[0..<nli]
               daemon.clients[ci].buf = daemon.clients[ci].buf[nli+1..^1]
               if line.len > 0:
+                if line.len > 1048576:
+                  if debugMode: stderr.writeLine("[gtm] line exceeds 1 MiB, disconnecting client")
+                  daemon.clients[ci].sock.close()
+                  daemon.clients.delete(ci)
+                  break
                 if debugMode: stderr.writeLine("[gtm] daemon recv: " & line)
-                let cmdJson = parseJson(line)
+                let cmdJson = try: parseJson(line) except CatchableError: nil
+                if cmdJson == nil:
+                  if debugMode: stderr.writeLine("[gtm] malformed JSON, disconnecting client")
+                  daemon.clients[ci].sock.close()
+                  daemon.clients.delete(ci)
+                  break
                 let cmd = parseDaemonCommand(line)
                 # Auth gate: require handshake first
                 if not daemon.clients[ci].authenticated and cmd.kind != dckHandshake:
@@ -1583,6 +1612,10 @@ proc runDaemon*() =
           daemon.running = false
           break
     daemon.persistFrames.inc
+    if signalFlag:
+      if debugMode: stderr.writeLine("[gtm] signal received, graceful shutdown")
+      daemon.gracefulShutdown()
+      break
     if daemon.persistFrames >= 1800:
       daemon.persistFrames = 0
       daemon.savePlaybackState()

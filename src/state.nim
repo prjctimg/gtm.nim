@@ -335,6 +335,7 @@ type
     aboutVisible*: bool
     reconnecting*: bool
     reconnectAttempts*: int
+    giveUpReconnect*: bool
     basePos*: float
     baseTime*: float
     lastDataAt*: float
