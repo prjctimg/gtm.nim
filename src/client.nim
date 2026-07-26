@@ -18,6 +18,8 @@ type
     ipcTimeoutSec*: float
     nextRetryAt*: float
     retryDelayMs*: int
+    connectionAttempts*: int
+    firstConnection*: bool
     lastDataAt*: float
     nextId: int
     pending: seq[PendingRequest]
@@ -76,25 +78,39 @@ proc ensureDaemon*(cli: DaemonClient) =
   if cli.connected: return
   let now = epochTime()
   if now < cli.nextRetryAt: return
+  # Per client.md §Connection retry (initial) and §Reconnection (post-loss):
+  #   initial:  100, 200, 400, 800, 1600, 3200, 5000 cap — 10 attempts
+  #   reconnect: 500, 1000, 2000, 4000, 8000, 10000 cap — 30 attempts
+  # connectionAttempts is reset to 0 on a successful handshake.
+  let maxAttempts = if cli.firstConnection: 10 else: 30
+  let capMs = if cli.firstConnection: 5000 else: 10000
+  if cli.connectionAttempts >= maxAttempts:
+    # Bail out; caller (TUI watchdog) surfaces a permanent failure to the user.
+    return
   if daemonIsRunning():
     if connectToDaemon(cli):
       if cli.handshake():
-        cli.retryDelayMs = 500
+        cli.retryDelayMs = if cli.firstConnection: 100 else: 500
+        cli.connectionAttempts = 0
+        cli.firstConnection = false
         cli.nextRetryAt = 0.0
         cli.lastDataAt = epochTime()
       else:
         try: cli.sock.close() except: discard
         cli.sock = nil
         cli.connected = false
+        cli.connectionAttempts.inc
         cli.nextRetryAt = now + cli.retryDelayMs.float / 1000.0
-        cli.retryDelayMs = min(cli.retryDelayMs * 2, 10000)
+        cli.retryDelayMs = min(cli.retryDelayMs * 2, capMs)
     else:
+      cli.connectionAttempts.inc
       cli.nextRetryAt = now + cli.retryDelayMs.float / 1000.0
-      cli.retryDelayMs = min(cli.retryDelayMs * 2, 10000)
+      cli.retryDelayMs = min(cli.retryDelayMs * 2, capMs)
   else:
     startDaemonProcess()
+    cli.connectionAttempts.inc
     cli.nextRetryAt = now + cli.retryDelayMs.float / 1000.0
-    cli.retryDelayMs = min(cli.retryDelayMs * 2, 10000)
+    cli.retryDelayMs = min(cli.retryDelayMs * 2, capMs)
 
 proc drainEventLines(cli: DaemonClient, buf: var string) =
   cli.drainedEvents = @[]
@@ -176,7 +192,7 @@ proc sendDaemonCmd*(cli: DaemonClient, cmd: JsonNode): JsonNode =
     let data = $cmd & "\n"
     cli.sock.send(data)
     var tmp: array[16384, char]
-    let timeout = if cli.ipcTimeoutSec > 0: cli.ipcTimeoutSec else: 3.0
+    let timeout = if cli.ipcTimeoutSec > 0: cli.ipcTimeoutSec else: 5.0
     var totalWait = 0.0
     while totalWait < timeout:
       var rfds: posix.TFdSet
@@ -598,6 +614,8 @@ proc newDaemonClient*(): DaemonClient =
     volume: 80, state: 0, running: false,
     connected: false, buf: "", backendType: abtDaemon,
     working: true, sleepTimerRemaining: 0,
-    ipcTimeoutSec: 3.0, nextRetryAt: 0.0, retryDelayMs: 500,
+    # Per client.md §Sending Commands: 5 second response timeout.
+    ipcTimeoutSec: 5.0, nextRetryAt: 0.0, retryDelayMs: 100,
+    connectionAttempts: 0, firstConnection: true,
     lastDataAt: 0.0, nextId: 0, pending: @[]
   )

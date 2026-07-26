@@ -24,7 +24,7 @@ proc loadConfig(state: var AppState) =
       if json.hasKey("idle_timeout"):
         state.config.idleTimeout = json["idle_timeout"].getInt(300)
       if json.hasKey("ipc_timeout"):
-        state.config.ipcTimeout = json["ipc_timeout"].getInt(3)
+        state.config.ipcTimeout = json["ipc_timeout"].getInt(5)
       if json.hasKey("yt_search_page_size"):
         state.ytSearchPageSize = json["yt_search_page_size"].getInt(10)
       if json.hasKey("keybindings"):
