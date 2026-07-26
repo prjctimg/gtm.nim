@@ -893,7 +893,10 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       result["track_channel"] = %d.player.metadata.artist
     if d.player.metadata.album.len > 0:
       result["track_album"] = %d.player.metadata.album
-    result["backend_type"] = %(if d.player of MixerBackend: "Mixer" elif d.player of FfmpegBackend: "FFmpeg" else: "ALSA")
+    when defined(useFFmpeg):
+      result["backend_type"] = %(if d.player of MixerBackend: "Mixer" elif d.player of FfmpegBackend: "FFmpeg" else: "ALSA")
+    else:
+      result["backend_type"] = %"process"
     var qArr = newJArray()
     for p in d.playbackQueue:
       qArr.add(%p)
@@ -1179,7 +1182,10 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       result["tracks"] = arr
   of dckCheckHealth:
     result["clients_connected"] = %d.clients.len
-    result["audio_backend"] = %(if d.player of MixerBackend: "mixer" elif d.player of FfmpegBackend: "ffmpeg" else: "process")
+    when defined(useFFmpeg):
+      result["audio_backend"] = %(if d.player of MixerBackend: "mixer" elif d.player of FfmpegBackend: "ffmpeg" else: "process")
+    else:
+      result["audio_backend"] = %"process"
     result["audio_working"] = %d.player.working
   of dckPing:
     result["pong"] = %true
