@@ -103,11 +103,17 @@ jobs:
         id: bins
         shell: bash
         run: |
-          for p in bin/gtm bin/gtmd gtm gtmd; do
-            [ -f "$p" ] && echo "found: $p"
-          done
+          echo "=== Searching for gtm/gtmd ==="
+          find . -maxdepth 3 -type f \( -name "gtm" -o -name "gtmd" \) ! -path "./.git/*" 2>/dev/null
+          echo "=== PATH locations ==="
+          which gtm 2>/dev/null || true
+          which gtmd 2>/dev/null || true
+          echo "=== ~/.nimble/bin ==="
+          ls -la ~/.nimble/bin/gtm* 2>/dev/null || true
+          echo "=== nimcache ==="
+          find . -path "*/nimcache/*" -name "gtm" -type f 2>/dev/null | head -5 || true
+          echo "=== bin/ ==="
           ls -la bin/ 2>/dev/null || true
-          ls -la gtm gtmd 2>/dev/null || true
 
       - name: Generate manpages
         run: |
@@ -121,15 +127,21 @@ jobs:
         shell: bash
         run: |
           platform="${{ matrix.platform }}"
-          # nimble may put binaries in bin/ or project root
           find_binary() {
-            for p in "bin/$1" "$1" ".nimble/bin/$1"; do
+            local name="$1"
+            # Search everywhere nimble might put it
+            for p in "bin/$name" "$name" "$HOME/.nimble/bin/$name"; do
               [ -f "$p" ] && { echo "$p"; return 0; }
             done
-            echo "ERROR: $1 not found" >&2; return 1
+            # Broader search
+            local found
+            found=$(find . -maxdepth 3 -type f -name "$name" ! -path "./.git/*" ! -path "./nimcache/*" 2>/dev/null | head -1)
+            [ -n "$found" ] && { echo "$found"; return 0; }
+            echo "ERROR: $name not found" >&2; return 1
           }
           GTM_BIN=$(find_binary gtm)
           GTMD_BIN=$(find_binary gtmd)
+          echo "GTM_BIN=$GTM_BIN GTMD_BIN=$GTMD_BIN"
           cp "$GTM_BIN" "gtm-${platform}"
           cp "$GTMD_BIN" "gtmd-${platform}"
 
