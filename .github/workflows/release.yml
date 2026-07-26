@@ -94,24 +94,26 @@ jobs:
           git clone https://github.com/prjctimg/gtm.spec.git
 
       - name: Install nimble dependencies
-        run: nimble install -y --depsOnly
+        run: |
+          nimble install -y --depsOnly
+          echo "NIMWAVE_PATH=$(ls -d ~/.nimble/pkgs2/nimwave*/src 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+          echo "ILLWAVE_PATH=$(ls -d ~/.nimble/pkgs2/illwave*/src 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+          echo "ANSIUTILS_PATH=$(ls -d ~/.nimble/pkgs2/ansiutils*/src 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+          echo "NIMWAVE=$NIMWAVE_PATH ILLWAVE=$ILLWAVE_PATH ANSI=$ANSIUTILS_PATH"
 
       - name: Build release binaries
-        run: nimble build -d:release
+        run: |
+          nimble build -d:release
+          nim c -d:release src/gtmd.nim
 
       - name: Locate binaries
         id: bins
         shell: bash
         run: |
           echo "=== Searching for gtm/gtmd ==="
-          find . -maxdepth 3 -type f \( -name "gtm" -o -name "gtmd" \) ! -path "./.git/*" 2>/dev/null
-          echo "=== PATH locations ==="
-          which gtm 2>/dev/null || true
-          which gtmd 2>/dev/null || true
+          find . -maxdepth 3 -type f \( -name "gtm" -o -name "gtmd" \) ! -path "./.git/*" ! -path "./nimcache/*" 2>/dev/null
           echo "=== ~/.nimble/bin ==="
           ls -la ~/.nimble/bin/gtm* 2>/dev/null || true
-          echo "=== nimcache ==="
-          find . -path "*/nimcache/*" -name "gtm" -type f 2>/dev/null | head -5 || true
           echo "=== bin/ ==="
           ls -la bin/ 2>/dev/null || true
 
@@ -129,11 +131,9 @@ jobs:
           platform="${{ matrix.platform }}"
           find_binary() {
             local name="$1"
-            # Search everywhere nimble might put it
-            for p in "bin/$name" "$name" "$HOME/.nimble/bin/$name"; do
+            for p in "bin/$name" "$name"; do
               [ -f "$p" ] && { echo "$p"; return 0; }
             done
-            # Broader search
             local found
             found=$(find . -maxdepth 3 -type f -name "$name" ! -path "./.git/*" ! -path "./nimcache/*" 2>/dev/null | head -1)
             [ -n "$found" ] && { echo "$found"; return 0; }
