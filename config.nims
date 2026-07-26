@@ -22,6 +22,11 @@ proc findDepPath(name: string): string =
       let srcDir = dir / "src"
       if dirExists(srcDir):
         return srcDir
+  for kind, dir in walkDir(getHomeDir() / ".nimble" / "pkgs2"):
+    if kind == pcDir and dir.startsWith(getHomeDir() / ".nimble" / "pkgs2" / name):
+      let srcDir = dir / "src"
+      if dirExists(srcDir):
+        return srcDir
   quit("Cannot find dependency '" & name & "'. Set the " & envVar & " environment variable or install the package via nimble.")
 
 proc gitVersion(): string =
