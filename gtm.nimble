@@ -1,5 +1,5 @@
 # Package
-version     = "0.1.0"
+version     = "0.4.9"
 author      = "prjctimg"
 description = "Terminal music player based on FFmpeg and nimwave. "
 license     = "MIT"

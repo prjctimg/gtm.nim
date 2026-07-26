@@ -366,7 +366,7 @@ type
     cursorVisible*: bool
 
 const
-  GTM_VERSION* {.strdefine.} = "0.4.8"
+  GTM_VERSION* {.strdefine.} = "0.4.9"
   GTM_BUILD_TIME* {.strdefine.} = ""
 
   FooterPresets*: Table[FooterPresetName, set[FooterModule]] = {
