@@ -2,7 +2,8 @@ import os, json, strutils, net, posix, random, osproc, times, tables
 from nativesockets import setBlocking, selectRead, SocketHandle
 import msgpack4nim
 import msgpack4nim/msgpack2json
-proc prctl(option: cint, arg2: cstring): cint {.importc, header: "<sys/prctl.h>".}
+when defined(linux):
+  proc prctl(option: cint, arg2: cstring): cint {.importc, header: "<sys/prctl.h>".}
 import audio, state, library, ytdlp
 
 var signalFlag* {.threadvar.}: bool
@@ -1249,7 +1250,8 @@ proc runDaemon*() =
       discard dup2(cint(crashFd), cint(1))
       discard dup2(cint(crashFd), cint(2))
     crashFile.close()
-  discard prctl(15.cint, "gtmd")
+  when defined(linux):
+    discard prctl(15.cint, "gtmd")
   writePidFile()
   setupSignalHandlers()
   var player: AudioBackend
