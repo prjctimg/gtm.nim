@@ -1657,25 +1657,25 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
     state.mode = imFilter; state.filterText = ""; state.filteredIndices = @[]
   of iw.Key.CtrlR:
     execCmd(state, "yt_recommended")
-  of iw.Key.AltY:
+  of AltY:
     state.overlay = OverlayState(kind: okYtSearch, query: "")
     state.lastCommandName = "YouTube Search"
     state.ytDebounceAt = 0
-  of iw.Key.AltC:
+  of AltC:
     state.overlay = OverlayState(kind: okThemePicker, query: "")
     state.lastCommandName = "Change Theme"
     state.updateThemePickerResults()
-  of iw.Key.AltE:
+  of AltE:
     state.eqVisible = not state.eqVisible
     if state.eqVisible: state.lastCommandName = "Equalizer"
     state.markDirty(ceSettings)
-  of iw.Key.AltQ:
+  of AltQ:
     state.overlay = OverlayState(kind: okQueueOverlay, query: "", cursor: state.queueCursor)
     state.lastCommandName = "Current Queue"
-  of iw.Key.AltP:
+  of AltP:
     if state.isPlaylistView() and state.playlistContentsIdx < 0:
       state.lastCommandName = "Create Playlist"; execCmd(state, "create_playlist")
-  of iw.Key.AltD:
+  of AltD:
     if state.isPlaylistView() and state.playlistContentsIdx < 0:
       state.lastCommandName = "Delete Playlist"; execCmd(state, "delete_playlist")
     elif state.tab == tabNowPlaying and state.playbackQueue.len > 0 and
@@ -1686,7 +1686,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
         let t = state.libraryTracks[libIdx]
         state.setFeedback("Remove '" & t.displayName() & "' from queue? (y/N)")
         state.queuePendingConfirm = 1
-  of iw.Key.AltR:
+  of AltR:
     if state.isPlaylistView() and state.playlistContentsIdx < 0:
       state.lastCommandName = "Rename Playlist"; execCmd(state, "rename_playlist")
   of iw.Key.Down:

@@ -1,6 +1,34 @@
 import illwave as iw
 import state, strutils, sequtils, tables
 
+const
+  AltA* = cast[iw.Key](256)
+  AltB* = cast[iw.Key](257)
+  AltC* = cast[iw.Key](258)
+  AltD* = cast[iw.Key](259)
+  AltE* = cast[iw.Key](260)
+  AltF* = cast[iw.Key](261)
+  AltG* = cast[iw.Key](262)
+  AltH* = cast[iw.Key](263)
+  AltI* = cast[iw.Key](264)
+  AltJ* = cast[iw.Key](265)
+  AltK* = cast[iw.Key](266)
+  AltL* = cast[iw.Key](267)
+  AltM* = cast[iw.Key](268)
+  AltN* = cast[iw.Key](269)
+  AltO* = cast[iw.Key](270)
+  AltP* = cast[iw.Key](271)
+  AltQ* = cast[iw.Key](272)
+  AltR* = cast[iw.Key](273)
+  AltS* = cast[iw.Key](274)
+  AltT* = cast[iw.Key](275)
+  AltU* = cast[iw.Key](276)
+  AltV* = cast[iw.Key](277)
+  AltW* = cast[iw.Key](278)
+  AltX* = cast[iw.Key](279)
+  AltY* = cast[iw.Key](280)
+  AltZ* = cast[iw.Key](281)
+
 proc fuzzyMatch*(query, target: string): bool =
   if query.len == 0: return true
   var qi = 0
@@ -109,7 +137,7 @@ proc parseKeyCode*(name: string): iw.Key =
     elif name.startsWith("Alt") and name.len > 3:
       let c = name[3]
       if c in {'A'..'Z'}:
-        cast[iw.Key](ord(iw.Key.AltA) + (c.ord - 'A'.ord))
+        cast[iw.Key](ord(AltA) + (c.ord - 'A'.ord))
       else:
         iw.Key.None
     else:
@@ -161,8 +189,8 @@ proc keyDisplayName*(key: iw.Key): string =
       "Shift+" & $char(ordv - ord(iw.Key.ShiftA) + ord('A'))
     elif ordv >= ord(iw.Key.CtrlA) and ordv <= ord(iw.Key.CtrlZ):
       "Ctrl+" & $char(ordv - ord(iw.Key.CtrlA) + ord('A'))
-    elif ordv >= ord(iw.Key.AltA) and ordv <= ord(iw.Key.AltZ):
-      "Alt+" & $char(ordv - ord(iw.Key.AltA) + ord('A'))
+    elif ordv >= ord(AltA) and ordv <= ord(AltZ):
+      "Alt+" & $char(ordv - ord(AltA) + ord('A'))
     elif ordv >= ord(iw.Key.F1) and ordv <= ord(iw.Key.F12):
       "F" & $(ordv - ord(iw.Key.F1) + 1)
     else:

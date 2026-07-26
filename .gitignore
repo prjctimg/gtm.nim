@@ -2,6 +2,8 @@ nimcache/
 nimblecache/
 ~/.nimble/
 bin/
+gtm
+gtmd
 *.exe
 *.o
 *.so

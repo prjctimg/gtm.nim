@@ -47,11 +47,10 @@ when defined(useSqlite):
   switch("passC", "-I" & projectDir / "vendor/sqlite")
 
 # Optional MPRIS support via libdbus-1 + nim-dbus
-when (staticExec("pkg-config --exists dbus-1 2>/dev/null && echo yes || echo no").strip == "yes"):
+const nimDbusPath {.strdefine.} = "/tmp/nim-dbus"
+when (staticExec("pkg-config --exists dbus-1 2>/dev/null && echo yes || echo no").strip == "yes") and dirExists(nimDbusPath):
   switch("define", "useMpris")
   switch("passC", staticExec("pkg-config --cflags dbus-1").strip)
   switch("passL", staticExec("pkg-config --libs dbus-1").strip)
   # nim-dbus source path (cloned from https://github.com/zielmicha/nim-dbus)
-  const nimDbusPath {.strdefine.} = "/tmp/nim-dbus"
-  if dirExists(nimDbusPath):
-    switch("path", nimDbusPath)
+  switch("path", nimDbusPath)
