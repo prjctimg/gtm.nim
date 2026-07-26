@@ -380,6 +380,47 @@ const
     fpnClock:     {fmPlayStatus, fmTime, fmDate}
   }.toTable()
 
+type
+  TrackInfo* = object
+    id*: string
+    title*: string
+    artist*: string
+    album*: string
+    genre*: string
+    path*: string
+    duration*: float
+    actualDuration*: float
+    coverArt*: string
+    favourite*: bool
+    trackNumber*: int
+    year*: int
+
+  CrossfadeConfigState* = object
+    enabled*: bool
+    durationSecs*: int
+    easing*: string
+
+  LoudnessMode* = enum
+    lmOff, lmTrack, lmAlbum, lmAuto
+
+  DaemonState* = object
+    version*: uint64
+    status*: PlaybackStatus
+    currentTrack*: TrackInfo
+    queue*: seq[string]
+    queueCursor*: uint64
+    volume*: int
+    shuffle*: bool
+    repeat*: string
+    mute*: bool
+    timePos*: float
+    duration*: float
+    sleepTimer*: int
+    crossfade*: CrossfadeConfigState
+    eqPreset*: string
+    eqEnabled*: bool
+    loudnessMode*: LoudnessMode
+    gapless*: bool
 
 proc stateDir*(): string =
   # Per gtm.spec protocol.md §Socket Locations fallback chain:
@@ -399,6 +440,65 @@ proc stateDir*(): string =
     return home & "/.gtm/gtm"
   # Last resort: /tmp/gtm-$USER/gtm (regardless of dirExists)
   return tmpUser
+
+proc statePath*(): string =
+  stateDir() & "/gtm_state.json"
+
+proc saveDaemonState*(s: DaemonState) =
+  try:
+    let dir = stateDir()
+    if not dirExists(dir): createDir(dir)
+    let j = %*{
+      "version": s.version,
+      "volume": s.volume,
+      "shuffle": s.shuffle,
+      "repeat": s.repeat,
+      "mute": s.mute,
+      "crossfade_enabled": s.crossfade.enabled,
+      "crossfade_duration": s.crossfade.durationSecs,
+      "crossfade_easing": s.crossfade.easing,
+      "eq_preset": s.eqPreset,
+      "eq_enabled": s.eqEnabled,
+      "queue": s.queue,
+      "queue_cursor": s.queueCursor,
+      "gapless": s.gapless,
+      "loudness_mode": s.loudnessMode.int
+    }
+    writeFile(statePath(), $j)
+  except:
+    stderr.writeLine("[gtm] saveDaemonState: " & getCurrentExceptionMsg())
+
+proc loadDaemonState*(): DaemonState =
+  result = DaemonState(
+    version: 0, status: psStopped, volume: 80,
+    shuffle: false, repeat: "off", mute: false,
+    crossfade: CrossfadeConfigState(enabled: false, durationSecs: 5, easing: "equal_power"),
+    eqPreset: "flat", eqEnabled: false,
+    loudnessMode: lmOff, gapless: true
+  )
+  let p = statePath()
+  if not fileExists(p): return
+  try:
+    let j = parseJson(readFile(p))
+    result.volume = j{"volume"}.getInt(80)
+    result.shuffle = j{"shuffle"}.getBool(false)
+    result.repeat = j{"repeat"}.getStr("off")
+    result.mute = j{"mute"}.getBool(false)
+    result.crossfade.enabled = j{"crossfade_enabled"}.getBool(false)
+    result.crossfade.durationSecs = j{"crossfade_duration"}.getInt(5)
+    result.crossfade.easing = j{"crossfade_easing"}.getStr("equal_power")
+    result.eqPreset = j{"eq_preset"}.getStr("flat")
+    result.eqEnabled = j{"eq_enabled"}.getBool(false)
+    result.gapless = j{"gapless"}.getBool(true)
+    result.loudnessMode = j{"loudness_mode"}.getInt(0).LoudnessMode
+    if j.hasKey("queue") and j["queue"].kind == JArray:
+      for item in j["queue"]:
+        if item.kind == JString:
+          result.queue.add(item.getStr())
+    result.queueCursor = uint64(j{"queue_cursor"}.getInt(0))
+    result.version = uint64(j{"version"}.getInt(0))
+  except:
+    stderr.writeLine("[gtm] loadDaemonState: " & getCurrentExceptionMsg())
 
 proc configDir*(): string =
   let xdg = getEnv("XDG_CONFIG_HOME", "")
