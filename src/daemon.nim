@@ -1632,10 +1632,15 @@ proc runDaemon*() =
       daemon.persistFrames = 0
       daemon.savePlaybackState()
     daemon.heartbeatFrames.inc
+    # protocol.md §Heartbeat: emit at least every 30 seconds during active
+    # playback. selectRead loop runs ~every 16 ms; 1800 frames ~ 28.8 s, so
+    # heartbeats fire slightly more often than required. Heartbeats are only
+    # sent while playing (state == 1) per spec qualifier.
     if daemon.heartbeatFrames >= 1800:
       daemon.heartbeatFrames = 0
-      let ev = %*{"event": "heartbeat"}
-      daemon.broadcastEvent(ev)
+      if daemon.player != nil and daemon.player.state == 1:
+        let ev = %*{"event": "heartbeat"}
+        daemon.broadcastEvent(ev)
     daemon.idleFrames.inc
     if daemon.idleFrames > daemon.idleTimeout * 60 and daemon.player.state == 0:
       daemon.savePlaybackState()
