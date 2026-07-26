@@ -26,15 +26,10 @@ type
     dckPlay, dckPause, dckStop, dckSeek, dckNext, dckPrev,
     dckSetVolume, dckGetVolume,
     dckPlayPause,
-    dckQuit, dckGetStatus, dckScan,
-    dckCreatePlaylist, dckDeletePlaylist, dckRenamePlaylist,
-    dckAddToPlaylist, dckRemoveFromPlaylist,
-    dckListPlaylists, dckGetPlaylistTracks,
+    dckQuit, dckGetStatus,
     dckToggleShuffle, dckCycleRepeat, dckSetSleepTimer, dckCancelSleepTimer,
     dckCrossfade,
     dckSetEqPreset, dckSetEqEnabled, dckListEqPresets,
-    dckGetLibrary, dckAddTrack, dckUpdateTrackPath,
-    dckQueueAdd, dckQueueRemove, dckQueueClear, dckQueueList, dckQueueSetCursor,
     dckAddFavourite, dckRemoveFavourite, dckGetFavourites,
     dckYtSearch, dckYtSearchPoll, dckYtSearchCancel,
     dckYtResolveStream, dckYtResolveStreamPoll,
@@ -44,6 +39,8 @@ type
     dckPing,
     dckHandshake,
     dckCheckHealth, dckToggleMute, dckSearch,
+    dckQueue, dckLibrary,
+    dckQueueSetCursor,
     dckUnknown
 
   DaemonCmd* = object
@@ -167,21 +164,12 @@ proc parseDaemonCommand(line: string): DaemonCmd =
     of "get_volume": result.kind = dckGetVolume
     of "quit": result.kind = dckQuit
     of "get_status": result.kind = dckGetStatus
-    of "create_playlist":
-      result.kind = dckCreatePlaylist; result.strArg = j{"name"}.getStr("")
-    of "delete_playlist":
-      result.kind = dckDeletePlaylist; result.intArg = j{"playlist_id"}.getInt(0)
-    of "rename_playlist":
-      result.kind = dckRenamePlaylist; result.intArg = j{"playlist_id"}.getInt(0); result.strArg = j{"name"}.getStr("")
-    of "add_to_playlist":
-      result.kind = dckAddToPlaylist; result.strArg = $j["data"]
-    of "remove_from_playlist":
-      result.kind = dckRemoveFromPlaylist; result.strArg = $j["data"]
-    of "list_playlists": result.kind = dckListPlaylists
-    of "get_playlist_tracks":
-      result.kind = dckGetPlaylistTracks; result.intArg = j{"playlist_id"}.getInt(0)
-    of "scan":
-      result.kind = dckScan; result.strArg = j{"path"}.getStr("")
+    of "queue":
+      result.kind = dckQueue
+      result.strArg = j{"action"}.getStr("")
+    of "library":
+      result.kind = dckLibrary
+      result.strArg = j{"action"}.getStr("")
     of "toggle_shuffle": result.kind = dckToggleShuffle
     of "cycle_repeat":
       result.kind = dckCycleRepeat
@@ -206,17 +194,6 @@ proc parseDaemonCommand(line: string): DaemonCmd =
     of "set_eq_enabled":
       result.kind = dckSetEqEnabled
       result.intArg = if j{"enabled"}.getBool(true): 1 else: 0
-    of "get_library": result.kind = dckGetLibrary
-    of "add_track":
-      result.kind = dckAddTrack; result.strArg = $j["data"]
-    of "update_track_path":
-      result.kind = dckUpdateTrackPath; result.strArg = $j["data"]
-    of "queue_add":
-      result.kind = dckQueueAdd; result.strArg = $j["data"]
-    of "queue_remove":
-      result.kind = dckQueueRemove; result.intArg = j{"index"}.getInt(0)
-    of "queue_clear": result.kind = dckQueueClear
-    of "queue_list": result.kind = dckQueueList
     of "queue_set_cursor":
       result.kind = dckQueueSetCursor; result.intArg = j{"index"}.getInt(0)
     of "add_favourite":
@@ -500,6 +477,259 @@ proc advanceToNextTrack(d: Daemon, forward: bool = true): bool =
 when defined(useMpris):
   include mpris
 
+proc executeQueueCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNode =
+  result = %*{"ok": true}
+  case action
+  of "list":
+    var arr = newJArray()
+    for p in d.playbackQueue:
+      arr.add(%p)
+    result["queue"] = arr
+  of "clear":
+    d.playbackQueue = @[]
+    d.shuffleOrder = @[]
+    d.shuffleIndex = 0
+    d.sendQueueEvent()
+  of "add":
+    let path = cmdJson{"path"}.getStr("")
+    let position = cmdJson{"position"}.getInt(-1)
+    if path.len > 0:
+      if position >= 0 and position < d.playbackQueue.len:
+        d.playbackQueue.insert(path, position)
+      else:
+        d.playbackQueue.add(path)
+      if isYtWatchUrl(path) and path notin d.ytDownloaded:
+        var alreadyDL = false
+        for task in d.ytDownloadTasks:
+          if task.url == path:
+            alreadyDL = true
+            break
+        if not alreadyDL:
+          var task: DownloadTask
+          if startDownload(YtSearchResult(url: path), d.ytDownloadDir, task.process, d.ytCookieSource, d.ytJsRuntime):
+            task.title = ""
+            task.url = path
+            task.outputDir = d.ytDownloadDir
+            task.completed = false
+            task.startedAt = epochTime()
+            d.ytDownloadTasks.add(task)
+          else:
+            stderr.writeLine("[gtm] Failed to start download for: " & path)
+        if path notin d.ytStreamUrls and not d.ytStreamResolving:
+          d.ytStreamResolveBuf = ""
+          d.ytStreamResolveUrl = path
+          discard startStreamUrlFetch(path, d.ytStreamResolveProcess, d.ytCookieSource, d.ytJsRuntime)
+          d.ytStreamResolving = true
+    d.sendQueueEvent()
+  of "add_many":
+    let paths = cmdJson{"paths"}
+    if paths.kind == JArray:
+      for item in paths:
+        var path = ""
+        var title = ""
+        var channel = ""
+        if item.kind == JString:
+          path = item.getStr("")
+        elif item.kind == JObject:
+          path = item{"path"}.getStr("")
+          title = item{"title"}.getStr("")
+          channel = item{"channel"}.getStr("")
+        if path.len > 0:
+          d.playbackQueue.add(path)
+          if isYtWatchUrl(path) and path notin d.ytDownloaded:
+            var alreadyDL = false
+            for task in d.ytDownloadTasks:
+              if task.url == path:
+                alreadyDL = true
+                break
+            if not alreadyDL:
+              var task: DownloadTask
+              if startDownload(YtSearchResult(url: path, title: title, channel: channel), d.ytDownloadDir, task.process, d.ytCookieSource, d.ytJsRuntime):
+                task.title = title
+                task.url = path
+                task.channel = channel
+                task.outputDir = d.ytDownloadDir
+                task.completed = false
+                task.startedAt = epochTime()
+                d.ytDownloadTasks.add(task)
+              else:
+                stderr.writeLine("[gtm] Failed to start download for: " & path)
+            if path notin d.ytStreamUrls and not d.ytStreamResolving:
+              d.ytStreamResolveBuf = ""
+              d.ytStreamResolveUrl = path
+              discard startStreamUrlFetch(path, d.ytStreamResolveProcess, d.ytCookieSource, d.ytJsRuntime)
+              d.ytStreamResolving = true
+      d.sendQueueEvent()
+  of "remove":
+    let index = cmdJson{"index"}.getInt(0)
+    if index >= 0 and index < d.playbackQueue.len:
+      d.playbackQueue.delete(index)
+    d.sendQueueEvent()
+  of "move":
+    let fromIdx = cmdJson{"from"}.getInt(0)
+    let toIdx = cmdJson{"to"}.getInt(0)
+    if fromIdx >= 0 and fromIdx < d.playbackQueue.len and toIdx >= 0 and toIdx < d.playbackQueue.len and fromIdx != toIdx:
+      let track = d.playbackQueue[fromIdx]
+      d.playbackQueue.delete(fromIdx)
+      d.playbackQueue.insert(track, toIdx)
+    d.sendQueueEvent()
+  of "set":
+    let paths = cmdJson{"paths"}
+    if paths.kind == JArray:
+      d.playbackQueue = @[]
+      for item in paths:
+        if item.kind == JString:
+          let path = item.getStr("")
+          if path.len > 0:
+            d.playbackQueue.add(path)
+    let startIdx = cmdJson{"start_idx"}.getInt(0)
+    if startIdx >= 0 and startIdx < d.playbackQueue.len:
+      d.shuffleIndex = startIdx
+    d.sendQueueEvent()
+  else:
+    result["ok"] = %false
+    result["error"] = %("unknown queue action: " & action)
+
+proc executeLibraryCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNode =
+  result = %*{"ok": true}
+  case action
+  of "scan":
+    let path = cmdJson{"path"}.getStr("")
+    if path.len > 0 and dirExists(path):
+      if d.scanningDir.len > 0:
+        result["scanning_already"] = %true
+      else:
+        d.scanningDir = path
+        d.scanningFiles = scanDirectoryRecursive(path)
+        d.scanningIdx = 0
+        result["scanning"] = %true
+        result["total_files"] = %d.scanningFiles.len
+  of "get_tracks":
+    if d.lib != nil:
+      let dbTracks = d.lib.loadTracks()
+      var arr = newJArray()
+      for t in dbTracks:
+        arr.add(%*{
+          "id": %t.id, "path": %t.path, "title": %t.title,
+          "artist": %t.artist, "album": %t.album, "duration": %t.duration,
+          "track_num": %t.trackNum, "year": %t.year, "genre": %t.genre,
+          "play_count": %t.playCount, "artist_id": %t.artistId,
+          "album_id": %t.albumId, "is_favourite": %t.isFavourite,
+          "added_at": %t.addedAt, "last_played": %t.lastPlayed
+        })
+      result["tracks"] = arr
+      let dbArtists = d.lib.loadArtists()
+      var artArr = newJArray()
+      for a in dbArtists:
+        artArr.add(%*{"id": %a.id, "name": %a.name})
+      result["artists"] = artArr
+      let dbAlbums = d.lib.loadAlbums()
+      var albArr = newJArray()
+      for a in dbAlbums:
+        albArr.add(%*{"id": %a.id, "title": %a.title, "artist_id": %a.artistId, "artist_name": %a.artistName, "year": %a.year, "genre": %a.genre})
+      result["albums"] = albArr
+  of "get_playlists":
+    if d.lib != nil:
+      let pls = d.lib.loadPlaylists()
+      var arr = newJArray()
+      for pl in pls:
+        arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
+      result["playlists"] = arr
+  of "create_playlist":
+    if d.lib != nil:
+      let name = cmdJson{"name"}.getStr("")
+      if name.len > 0:
+        let id = d.lib.createPlaylist(name)
+        result["playlist_id"] = %id
+        let pls = d.lib.loadPlaylists()
+        var arr = newJArray()
+        for pl in pls:
+          arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
+        result["playlists"] = arr
+  of "delete_playlist":
+    if d.lib != nil:
+      let plId = int64(cmdJson{"id"}.getInt(0))
+      if plId > 0:
+        d.lib.deletePlaylist(plId)
+        let pls = d.lib.loadPlaylists()
+        var arr = newJArray()
+        for pl in pls:
+          arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
+        result["playlists"] = arr
+  of "rename_playlist":
+    if d.lib != nil:
+      let plId = int64(cmdJson{"playlist_id"}.getInt(0))
+      let name = cmdJson{"name"}.getStr("")
+      if plId > 0 and name.len > 0:
+        d.lib.renamePlaylist(plId, name)
+        let pls = d.lib.loadPlaylists()
+        var arr = newJArray()
+        for pl in pls:
+          arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
+        result["playlists"] = arr
+  of "add_to_playlist":
+    if d.lib != nil:
+      let plId = int64(cmdJson{"playlist_id"}.getInt(0))
+      let trackIds = cmdJson{"track_ids"}
+      if plId > 0 and trackIds.kind == JArray:
+        let pos = cmdJson{"position"}.getInt(0)
+        var i = 0
+        for tidNode in trackIds:
+          let trackId = int64(tidNode.getInt(0))
+          if trackId > 0:
+            d.lib.addTrackToPlaylist(plId, trackId, pos + i)
+            inc i
+  of "remove_from_playlist":
+    if d.lib != nil:
+      let plId = int64(cmdJson{"playlist_id"}.getInt(0))
+      let trackId = int64(cmdJson{"track_id"}.getInt(0))
+      if plId > 0 and trackId > 0:
+        d.lib.removeTrackFromPlaylist(plId, trackId)
+  of "get_playlist_tracks":
+    if d.lib != nil:
+      let plId = int64(cmdJson{"playlist_id"}.getInt(0))
+      if plId > 0:
+        let pls = d.lib.loadPlaylists()
+        for pl in pls:
+          if pl.id == plId:
+            var arr = newJArray()
+            for tid in pl.trackIds:
+              arr.add(%tid)
+            result["track_ids"] = arr
+            break
+        result["playlist_id"] = %plId
+  of "add_track":
+    if d.lib != nil:
+      let path = cmdJson{"path"}.getStr("")
+      let title = cmdJson{"title"}.getStr("")
+      let artist = cmdJson{"artist"}.getStr("")
+      let album = cmdJson{"album"}.getStr("YouTube")
+      let duration = cmdJson{"duration"}.getFloat(0.0)
+      if path.len > 0:
+        let trackId = d.lib.addTrack(path, title, artist, album, duration, 0, 0, "")
+        result["track_id"] = %trackId
+  of "update_metadata":
+    if d.lib != nil:
+      let oldPath = cmdJson{"old_path"}.getStr("")
+      let newPath = cmdJson{"new_path"}.getStr("")
+      let newTitle = cmdJson{"title"}.getStr("")
+      if oldPath.len > 0 and newPath.len > 0:
+        d.lib.updateTrackPath(oldPath, newPath, newTitle)
+        result["updated"] = %true
+  of "search":
+    if d.lib != nil:
+      let query = cmdJson{"query"}.getStr("")
+      if query.len > 0:
+        let tracks = d.lib.searchTracks(query)
+        var arr = newJArray()
+        for t in tracks:
+          arr.add(%*{"id": %t.id, "path": %t.path, "title": %t.title,
+            "artist": %t.artist, "album": %t.album, "duration": %t.duration})
+        result["tracks"] = arr
+  else:
+    result["ok"] = %false
+    result["error"] = %("unknown library action: " & action)
+
 proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNode =
   result = %*{"ok": true}
   if d.player == nil:
@@ -673,120 +903,18 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
     d.player.setEqPreset(cmd.strArg)
   of dckSetEqEnabled:
     d.player.setEqEnabled(cmd.intArg != 0)
-  of dckGetLibrary:
-    if d.lib != nil:
-      let dbTracks = d.lib.loadTracks()
-      var arr = newJArray()
-      for t in dbTracks:
-        arr.add(%*{
-          "id": %t.id, "path": %t.path, "title": %t.title,
-          "artist": %t.artist, "album": %t.album, "duration": %t.duration,
-          "track_num": %t.trackNum, "year": %t.year, "genre": %t.genre,
-          "play_count": %t.playCount, "artist_id": %t.artistId,
-          "album_id": %t.albumId, "is_favourite": %t.isFavourite,
-          "added_at": %t.addedAt, "last_played": %t.lastPlayed
-        })
-      result["tracks"] = arr
-      let dbArtists = d.lib.loadArtists()
-      var artArr = newJArray()
-      for a in dbArtists:
-        artArr.add(%*{"id": %a.id, "name": %a.name})
-      result["artists"] = artArr
-      let dbAlbums = d.lib.loadAlbums()
-      var albArr = newJArray()
-      for a in dbAlbums:
-        albArr.add(%*{"id": %a.id, "title": %a.title, "artist_id": %a.artistId, "artist_name": %a.artistName, "year": %a.year, "genre": %a.genre})
-      result["albums"] = albArr
-  of dckAddTrack:
-    if d.lib != nil and cmd.strArg.len > 0:
-      try:
-        let data = parseJson(cmd.strArg)
-        let path = data{"path"}.getStr("")
-        let title = data{"title"}.getStr("")
-        let artist = data{"channel"}.getStr("")
-        let album = data{"album"}.getStr("YouTube")
-        let duration = data{"duration"}.getFloat(0.0)
-        if path.len > 0:
-          let trackId = d.lib.addTrack(path, title, artist, album, duration, 0, 0, "")
-          result["track_id"] = %trackId
-      except: stderr.writeLine("[gtm] addTrack error: " & getCurrentExceptionMsg())
-  of dckUpdateTrackPath:
-    if d.lib != nil and cmd.strArg.len > 0:
-      try:
-        let data = parseJson(cmd.strArg)
-        let oldPath = data{"old_path"}.getStr("")
-        let newPath = data{"new_path"}.getStr("")
-        let newTitle = data{"title"}.getStr("")
-        if oldPath.len > 0 and newPath.len > 0:
-          d.lib.updateTrackPath(oldPath, newPath, newTitle)
-          result["updated"] = %true
-      except: stderr.writeLine("[gtm] updateTrackPath error: " & getCurrentExceptionMsg())
-  of dckCreatePlaylist:
-    if d.lib != nil and cmd.strArg.len > 0:
-      let id = d.lib.createPlaylist(cmd.strArg)
-      result["playlist_id"] = %id
-      let pls = d.lib.loadPlaylists()
-      var arr = newJArray()
-      for pl in pls:
-        arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
-      result["playlists"] = arr
-  of dckDeletePlaylist:
-    if d.lib != nil and cmd.intArg > 0:
-      d.lib.deletePlaylist(int64(cmd.intArg))
-      let pls = d.lib.loadPlaylists()
-      var arr = newJArray()
-      for pl in pls:
-        arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
-      result["playlists"] = arr
-  of dckRenamePlaylist:
-    if d.lib != nil and cmd.intArg > 0 and cmd.strArg.len > 0:
-      d.lib.renamePlaylist(int64(cmd.intArg), cmd.strArg)
-      let pls = d.lib.loadPlaylists()
-      var arr = newJArray()
-      for pl in pls:
-        arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
-      result["playlists"] = arr
-  of dckAddToPlaylist, dckRemoveFromPlaylist:
-    if d.lib != nil and cmd.strArg.len > 0:
-      try:
-        let data = parseJson(cmd.strArg)
-        let plId = int64(data{"playlist_id"}.getInt(0))
-        let trackId = int64(data{"track_id"}.getInt(0))
-        if plId > 0 and trackId > 0:
-          if cmd.kind == dckAddToPlaylist:
-            let pos = data{"position"}.getInt(0)
-            d.lib.addTrackToPlaylist(plId, trackId, pos)
-          else:
-            d.lib.removeTrackFromPlaylist(plId, trackId)
-      except: stderr.writeLine("[gtm] addToPlaylist error: " & getCurrentExceptionMsg())
-  of dckListPlaylists:
-    if d.lib != nil:
-      let pls = d.lib.loadPlaylists()
-      var arr = newJArray()
-      for pl in pls:
-        arr.add(%*{"id": pl.id, "name": pl.name, "track_count": pl.trackIds.len})
-      result["playlists"] = arr
-  of dckGetPlaylistTracks:
-    if d.lib != nil and cmd.intArg > 0:
-      let pls = d.lib.loadPlaylists()
-      for pl in pls:
-        if pl.id == int64(cmd.intArg):
-          var arr = newJArray()
-          for tid in pl.trackIds:
-            arr.add(%tid)
-          result["track_ids"] = arr
-          break
-      result["playlist_id"] = %cmd.intArg
-  of dckScan:
-    if cmd.strArg.len > 0 and dirExists(cmd.strArg):
-      if d.scanningDir.len > 0:
-        result["scanning_already"] = %true
-      else:
-        d.scanningDir = cmd.strArg
-        d.scanningFiles = scanDirectoryRecursive(cmd.strArg)
-        d.scanningIdx = 0
-        result["scanning"] = %true
-        result["total_files"] = %d.scanningFiles.len
+  of dckQueue:
+    if cmdJson != nil:
+      return d.executeQueueCommand(cmd.strArg, cmdJson)
+    else:
+      result["ok"] = %false
+      result["error"] = %"queue requires cmdJson"
+  of dckLibrary:
+    if cmdJson != nil:
+      return d.executeLibraryCommand(cmd.strArg, cmdJson)
+    else:
+      result["ok"] = %false
+      result["error"] = %"library requires cmdJson"
   of dckToggleShuffle:
     d.shuffleEnabled = not d.shuffleEnabled
     if d.shuffleEnabled and d.playbackQueue.len > 0:
@@ -806,63 +934,6 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
   of dckCancelSleepTimer:
     d.sleepTimerRemaining = 0
     result["sleep_timer"] = %0
-  of dckQueueAdd:
-    if cmd.strArg.len > 0:
-      try:
-        let items = parseJson(cmd.strArg)
-        for item in items:
-          var path = ""
-          var title = ""
-          var channel = ""
-          if item.kind == JString:
-            path = item.getStr("")
-          elif item.kind == JObject:
-            path = item{"path"}.getStr("")
-            title = item{"title"}.getStr("")
-            channel = item{"channel"}.getStr("")
-          if path.len > 0:
-            d.playbackQueue.add(path)
-            if isYtWatchUrl(path) and path notin d.ytDownloaded:
-              var alreadyDL = false
-              for task in d.ytDownloadTasks:
-                if task.url == path:
-                  alreadyDL = true
-                  break
-              if not alreadyDL:
-                var task: DownloadTask
-                if startDownload(YtSearchResult(url: path, title: title, channel: channel), d.ytDownloadDir, task.process, d.ytCookieSource, d.ytJsRuntime):
-                  task.title = title
-                  task.url = path
-                  task.channel = channel
-                  task.outputDir = d.ytDownloadDir
-                  task.completed = false
-                  task.startedAt = epochTime()
-                  d.ytDownloadTasks.add(task)
-                else:
-                  stderr.writeLine("[gtm] Failed to start download for: " & path)
-              # Also start resolving stream URL for instant playback
-              if path notin d.ytStreamUrls and not d.ytStreamResolving:
-                d.ytStreamResolveBuf = ""
-                d.ytStreamResolveUrl = path
-                discard startStreamUrlFetch(path, d.ytStreamResolveProcess, d.ytCookieSource, d.ytJsRuntime)
-                d.ytStreamResolving = true
-        result["queue_length"] = %d.playbackQueue.len
-        d.sendQueueEvent()
-      except: stderr.writeLine("[gtm] queueAdd error: " & getCurrentExceptionMsg())
-  of dckQueueRemove:
-    if cmd.intArg >= 0 and cmd.intArg < d.playbackQueue.len:
-      d.playbackQueue.delete(cmd.intArg)
-    d.sendQueueEvent()
-  of dckQueueClear:
-    d.playbackQueue = @[]
-    d.shuffleOrder = @[]
-    d.shuffleIndex = 0
-    d.sendQueueEvent()
-  of dckQueueList:
-    var arr = newJArray()
-    for p in d.playbackQueue:
-      arr.add(%p)
-    result["queue"] = arr
   of dckQueueSetCursor:
     d.shuffleIndex = cmd.intArg
     result["cursor"] = %d.shuffleIndex
