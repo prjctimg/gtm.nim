@@ -97,7 +97,9 @@ jobs:
         run: nimble install -y --depsOnly
 
       - name: Build release binaries
-        run: nim e build.nims
+        run: |
+          nim c -d:release src/gtmd.nim
+          nim c -d:release src/gtm.nim
 
       - name: Generate manpages
         run: |
