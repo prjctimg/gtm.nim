@@ -1,5 +1,6 @@
 nimcache/
 nimblecache/
+~/.nimble/
 bin/
 *.exe
 *.o
