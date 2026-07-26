@@ -225,7 +225,8 @@ proc sendDaemonCmd*(cli: DaemonClient, cmd: JsonNode): JsonNode =
 
 proc handshake*(cli: DaemonClient): bool =
   if cli == nil or cli.sock == nil or not cli.connected: return false
-  let cmd = %*{"cmd": "handshake", "version": 1, "client": "gtm"}
+  let cmd = %*{"cmd": "handshake", "version": 2, "client": "gtm",
+    "client_version": "0.1.0"}
   let resp = sendDaemonCmd(cli, cmd)
   result = resp.hasKey("ok") and resp["ok"].getBool(false)
 

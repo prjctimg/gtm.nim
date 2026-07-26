@@ -509,7 +509,7 @@ proc advanceToNextTrack(d: Daemon, forward: bool = true): bool =
 when defined(useMpris):
   include mpris
 
-proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
+proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNode =
   result = %*{"ok": true}
   if d.player == nil:
     result["ok"] = %false
@@ -1086,9 +1086,21 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd): JsonNode =
   of dckPing:
     result["pong"] = %true
   of dckHandshake:
-    result["version"] = %1
-    result["daemon"] = %"gtmd-nim"
-    result["daemon_version"] = %"0.1.0"
+    const daemonProtocolVersion = 2
+    if cmdJson == nil or not cmdJson.hasKey("version"):
+      result["ok"] = %false
+      result["error"] = %"handshake missing 'version' field"
+    else:
+      let clientVersion = cmdJson["version"].getInt(0)
+      if clientVersion > daemonProtocolVersion:
+        result["ok"] = %false
+        result["error"] = %("protocol version " & $clientVersion &
+          " is newer than daemon version " & $daemonProtocolVersion)
+      else:
+        result["ok"] = %true
+        result["version"] = %daemonProtocolVersion
+        result["daemon"] = %"gtmd-nim"
+        result["daemon_version"] = %"0.1.0"
   of dckUnknown:
     result["ok"] = %false
     result["error"] = %("unknown command: " & cmd.strArg)
@@ -1351,7 +1363,7 @@ proc runDaemon*() =
                     break
                 else:
                   let resp = try:
-                    executeCommand(daemon, cmd)
+                    executeCommand(daemon, cmd, cmdJson)
                   except Exception as ex:
                     if debugMode: stderr.writeLine("[gtm] command error: " & ex.msg)
                     %*{"ok": false, "error": ex.msg}
