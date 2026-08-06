@@ -381,9 +381,9 @@ Enable or disable reverb on the mixer.
 | Arg | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `false` | Whether reverb is on |
-| `room_scale` | float | `0.7` | Room scale parameter (0.0–1.0) |
+| `room_size` | float | `0.7` | Room size parameter (0.0–1.0) |
 
-Request: `{"cmd": "set_reverb", "enabled": true, "room_scale": 0.8}`
+Request: `{"cmd": "set_reverb", "enabled": true, "room_size": 0.8}`
 
 Response: `{"ok": true}`
 
@@ -414,11 +414,12 @@ Response: `{"ok": true}`
 #### `scan_loudness`
 
 Start a background loudness scan over the library using ffmpeg's EBU R128
-filter. Emits `scan_loudness_progress` / `scan_loudness_done` events.
+filter. Emits `loudness_scan_progress` / `loudness_scan_done` events.
 
 | Arg | Type | Default | Description |
 |---|---|---|---|
 | `force` | bool | `false` | Re-scan tracks that already have loudness data |
+| `track_ids` | int64[] | `null` | Optional list of track IDs to scan; all when omitted |
 
 Request: `{"cmd": "scan_loudness", "force": true}`
 
@@ -602,8 +603,11 @@ Request: `{"cmd": "organize_library", "dry_run": true}`
 
 Response:
 ```json
-{"ok": true, "planned_moves": [{"from": "/old/path.mp3", "to": "/Artist/Album/Track.mp3"}]}
+{"ok": true, "moves": [{"from": "/old/path.mp3", "to": "/Artist/Album/Track.mp3"}], "dry_run": true}
 ```
+
+Moves are applied when `dry_run` is false. Emits a `library_organized` custom
+event when moves are applied.
 
 #### `get_cover_art`
 
@@ -616,10 +620,10 @@ daemon searches Deezer and stores the result in the `covers` table.
 
 Response:
 ```json
-{"ok": true, "track_id": 5, "cover_base64": "<base64 PNG>", "cached": true}
+{"ok": true, "track_id": 5, "data": "<base64 PNG>", "cached": true}
 ```
 
-`cover_base64` is `null` when no cover could be found.
+`data` is `null` when no cover could be found.
 
 #### `get_lyrics`
 
@@ -632,15 +636,17 @@ store them in the `lyrics` table.
 
 Response:
 ```json
-{"ok": true, "track_id": 5, "lyrics": "[00:12.00]Line one\n[00:15.50]Line two", "cached": true}
+{"ok": true, "track_id": 5, "lyrics": {"synced": true, "lines": [{"time": 12.0, "text": "Line one"}]}, "cached": true}
 ```
 
-`lyrics` is `null` when no lyrics could be found.
+`lyrics` is `null` when no lyrics could be found. When present it is an object
+with a `synced` boolean and a `lines` array of `{time, text}` entries parsed
+from the LRC source.
 
 #### `sync_covers`
 
 Start a background scan that fetches missing cover art for all library tracks.
-Emits `sync_covers_progress` / `sync_covers_done` events.
+Emits `covers_synced` custom event when complete.
 
 Request: `{"cmd": "sync_covers"}`
 
@@ -652,7 +658,7 @@ Response:
 #### `sync_lyrics`
 
 Start a background scan that fetches missing lyrics for all library tracks.
-Emits `sync_lyrics_progress` / `sync_lyrics_done` events.
+Emits `lyrics_synced` custom event when complete.
 
 Request: `{"cmd": "sync_lyrics"}`
 

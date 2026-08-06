@@ -159,6 +159,7 @@ type
     okCommandPalette
     okQueueOverlay
     okFuzzyFinder
+    okMetadataEditor
 
   YtSubTab* = enum ystAll, ystPlaylists
 
@@ -181,6 +182,11 @@ type
     ytAutocompleteSuggestions*: seq[string]
     ytAutocompleteCursor*: int
     ytAutocompleteVisible*: bool
+    mdTrackId*: int64
+    mdField*: int
+    mdBuffer*: string
+    mdValues*: seq[string]
+    mdEditing*: bool
 
   DownloadTask* = object
     process*: Process
@@ -226,6 +232,9 @@ type
 
   SettingsCategory* = enum
     scAudio, scYouTube, scAppearance, scSystem
+
+  LoudnessMode* = enum
+    lmOff, lmTrack, lmAlbum, lmAuto
 
   AppState* = object
     theme*: Theme
@@ -332,6 +341,13 @@ type
     crossfadeStarted*: bool
     crossfading*: bool
     crossfadeNextPath*: string
+    gapless*: bool
+    loudnessMode*: LoudnessMode
+    preGainDb*: float
+    reverbEnabled*: bool
+    reverbRoomScale*: float
+    dynamicModeEnabled*: bool
+    scrobbleEnabled*: bool
     aboutVisible*: bool
     reconnecting*: bool
     reconnectAttempts*: int
@@ -366,7 +382,7 @@ type
     cursorVisible*: bool
 
 const
-  GTM_VERSION* {.strdefine.} = "0.4.9"
+  GTM_VERSION* {.strdefine.} = "0.5.0"
   GTM_BUILD_TIME* {.strdefine.} = ""
 
   FooterPresets*: Table[FooterPresetName, set[FooterModule]] = {
@@ -399,9 +415,6 @@ type
     enabled*: bool
     durationSecs*: int
     easing*: string
-
-  LoudnessMode* = enum
-    lmOff, lmTrack, lmAlbum, lmAuto
 
   ReverbConfigState* = object
     enabled*: bool

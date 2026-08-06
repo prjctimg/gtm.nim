@@ -38,6 +38,20 @@ proc loadConfig(state: var AppState) =
         state.crossfadeDuration = json["crossfade_duration"].getInt(0)
       if json.hasKey("crossfade_curve"):
         state.crossfadeCurve = CrossfadeCurveType(json["crossfade_curve"].getInt(1))
+      if json.hasKey("gapless"):
+        state.gapless = json["gapless"].getBool(false)
+      if json.hasKey("loudness_mode"):
+        state.loudnessMode = LoudnessMode(json["loudness_mode"].getInt(0))
+      if json.hasKey("pre_gain_db"):
+        state.preGainDb = json["pre_gain_db"].getFloat(-14.0)
+      if json.hasKey("reverb_enabled"):
+        state.reverbEnabled = json["reverb_enabled"].getBool(false)
+      if json.hasKey("reverb_room_scale"):
+        state.reverbRoomScale = json["reverb_room_scale"].getFloat(0.7)
+      if json.hasKey("dynamic_mode"):
+        state.dynamicModeEnabled = json["dynamic_mode"].getBool(false)
+      if json.hasKey("scrobble_enabled"):
+        state.scrobbleEnabled = json["scrobble_enabled"].getBool(false)
       let refreshSeed = state.config.refreshTheme or state.config.theme == "random"
       state.theme = getTheme(state.config.theme, refreshSeed)
       state.highlightGroups = initHighlightGroups(state.theme)
@@ -71,6 +85,13 @@ proc saveConfig(state: AppState) =
     "footer_preset": %($state.footerPreset).substr(3).toLowerAscii(),
     "crossfade_duration": %state.crossfadeDuration,
     "crossfade_curve": %state.crossfadeCurve.ord,
+    "gapless": %state.gapless,
+    "loudness_mode": %state.loudnessMode.ord,
+    "pre_gain_db": %state.preGainDb,
+    "reverb_enabled": %state.reverbEnabled,
+    "reverb_room_scale": %state.reverbRoomScale,
+    "dynamic_mode": %state.dynamicModeEnabled,
+    "scrobble_enabled": %state.scrobbleEnabled,
     "yt_search_page_size": %state.ytSearchPageSize,
     "ipc_timeout": %state.config.ipcTimeout
   }
@@ -304,7 +325,7 @@ proc moveSelection(state: var AppState, delta: int) =
       state.selectIndex = 0
     else:
       let maxIdx = case state.settingsCategory
-        of scAudio: 3
+        of scAudio: 13
         of scYouTube: 6
         of scAppearance: 3
         of scSystem: 2
@@ -753,6 +774,54 @@ proc adjustSetting(state: var AppState, delta: int) =
       if state.player of DaemonClient:
         DaemonClient(state.player).setCrossfadeCurve(state.crossfadeCurve.ord)
       state.saveConfig()
+    of 3: # Daemon — info only
+      discard
+    of 4: # Gapless
+      state.gapless = not state.gapless
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setGapless(state.gapless)
+      state.saveConfig()
+    of 5: # Loudness Mode
+      const loudnessModes = [lmOff, lmTrack, lmAlbum, lmAuto]
+      var mi = 0
+      for idx, m in loudnessModes:
+        if m == state.loudnessMode:
+          mi = (idx + delta + loudnessModes.len) mod loudnessModes.len
+          break
+      state.loudnessMode = loudnessModes[mi]
+      let modeStr = case state.loudnessMode
+        of lmOff: "off"
+        of lmTrack: "track"
+        of lmAlbum: "album"
+        of lmAuto: "auto"
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setLoudnessMode(modeStr)
+      state.saveConfig()
+    of 6: # Pre-Gain
+      state.preGainDb = max(-24.0, min(0.0, state.preGainDb + delta.toFloat))
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setPreGain(state.preGainDb)
+      state.saveConfig()
+    of 7: # Reverb
+      state.reverbEnabled = not state.reverbEnabled
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setReverb(state.reverbEnabled, state.reverbRoomScale)
+      state.saveConfig()
+    of 8: # Reverb Room Scale
+      state.reverbRoomScale = max(0.0, min(1.0, state.reverbRoomScale + delta.toFloat * 0.05))
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setReverb(state.reverbEnabled, state.reverbRoomScale)
+      state.saveConfig()
+    of 9: # Dynamic Mode
+      state.dynamicModeEnabled = not state.dynamicModeEnabled
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setDynamicMode(state.dynamicModeEnabled)
+      state.saveConfig()
+    of 10: # Scrobble
+      state.scrobbleEnabled = not state.scrobbleEnabled
+      if state.player of DaemonClient:
+        discard DaemonClient(state.player).setScrobble(state.scrobbleEnabled)
+      state.saveConfig()
     else: discard
   of scYouTube:
     case state.selectIndex
@@ -843,6 +912,64 @@ proc handleThemePickerOverlay(state: var AppState, key: iw.Key, chars: seq[Rune]
     state.overlay.cursor = 0
   if state.overlay.strResults.len > 0:
     state.overlay.cursor = min(state.overlay.cursor, state.overlay.strResults.len - 1)
+
+proc openMetadataEditor(state: var AppState) =
+  if state.tab != tabLibrary or state.libraryFocusPanel != lpContent: return
+  let realIdx = state.filteredIndex(state.selectIndex)
+  if realIdx < 0 or realIdx >= state.libraryTracks.len: return
+  let t = state.libraryTracks[realIdx]
+  state.overlay = OverlayState(kind: okMetadataEditor, mdTrackId: t.id,
+    mdField: 0, mdBuffer: "", mdEditing: false,
+    mdValues: @[t.title, t.artist, t.album, t.genre,
+      (if t.year > 0: $t.year else: ""),
+      (if t.trackNum > 0: $t.trackNum else: "")])
+
+proc saveMetadataEditor(state: var AppState) =
+  let ov = state.overlay
+  if ov.kind != okMetadataEditor or ov.mdValues.len < 6: return
+  let year = try: parseInt(ov.mdValues[4]) except CatchableError: 0
+  let trackNum = try: parseInt(ov.mdValues[5]) except CatchableError: 0
+  if state.player of DaemonClient:
+    discard DaemonClient(state.player).updateTrackMetadata(ov.mdTrackId,
+      ov.mdValues[0], ov.mdValues[1], ov.mdValues[2], ov.mdValues[3], year, trackNum)
+  state.overlay.clear()
+  state.showNotification("Metadata updated")
+  state.rebuildItems()
+
+proc handleMetadataEditorOverlay(state: var AppState, key: iw.Key, chars: seq[Rune]) =
+  case key
+  of iw.Key.Escape:
+    state.overlay.clear()
+  of iw.Key.Enter:
+    if state.overlay.mdField >= 5:
+      if state.overlay.mdBuffer.len > 0:
+        state.overlay.mdValues[5] = state.overlay.mdBuffer
+      state.saveMetadataEditor()
+    else:
+      if state.overlay.mdBuffer.len > 0:
+        state.overlay.mdValues[state.overlay.mdField] = state.overlay.mdBuffer
+      state.overlay.mdField.inc
+      state.overlay.mdBuffer = ""
+  of iw.Key.Up:
+    if state.overlay.mdBuffer.len > 0:
+      state.overlay.mdValues[state.overlay.mdField] = state.overlay.mdBuffer
+    if state.overlay.mdField > 0:
+      state.overlay.mdField.dec
+      state.overlay.mdBuffer = ""
+  of iw.Key.Down:
+    if state.overlay.mdBuffer.len > 0:
+      state.overlay.mdValues[state.overlay.mdField] = state.overlay.mdBuffer
+    if state.overlay.mdField < 5:
+      state.overlay.mdField.inc
+      state.overlay.mdBuffer = ""
+  of iw.Key.Backspace:
+    if state.overlay.mdBuffer.len > 0:
+      state.overlay.mdBuffer = state.overlay.mdBuffer[0..^2]
+  else:
+    for ch in chars:
+      let code = ch.int
+      if code >= 32 and code < 127:
+        state.overlay.mdBuffer &= $ch
 
 proc handleYtSearchOverlay(state: var AppState, key: iw.Key, chars: seq[Rune]) =
   case key
@@ -1433,6 +1560,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
     of okPlaylistSearch: state.handlePlaylistSearchOverlay(key, chars)
     of okCommandPalette: state.handleCommandPaletteOverlay(key, chars)
     of okFuzzyFinder: state.handleFuzzyFinderOverlay(key, chars)
+    of okMetadataEditor: state.handleMetadataEditorOverlay(key, chars)
     of okNone: discard
     return
   const sidebarScopes = [fsAll, fsArtists, fsAlbums, fsPlaylists, fsRecent, fsFavourites, fsLastPlayed, fsMostPlayed, fsLeastPlayed, fsDownloads]
@@ -1726,6 +1854,18 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
         case state.selectIndex
         of 3: # Daemon status (refresh)
           state.daemonConnected = state.player of DaemonClient and DaemonClient(state.player).connected
+        of 11: # Scan Loudness
+          if state.player of DaemonClient:
+            discard DaemonClient(state.player).scanLoudness(false)
+            state.setFeedback("Loudness scan started")
+        of 12: # Sync Covers
+          if state.player of DaemonClient:
+            DaemonClient(state.player).syncCovers()
+            state.setFeedback("Cover sync started")
+        of 13: # Sync Lyrics
+          if state.player of DaemonClient:
+            DaemonClient(state.player).syncLyrics()
+            state.setFeedback("Lyrics sync started")
         else: discard
       of scYouTube:
         case state.selectIndex
@@ -1794,6 +1934,10 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
     state.overlay = OverlayState(kind: okQueuePicker, query: "")
     state.lastCommandName = "Add to Queue"
     for i in 0..<state.libraryTracks.len: state.overlay.results.add(i)
+  of iw.Key.E:
+    state.openMetadataEditor()
+    if state.overlay.kind == okMetadataEditor:
+      state.lastCommandName = "Edit Metadata"
   of iw.Key.H:
     if state.tab == tabLibrary:
       const sbar = [fsAll, fsArtists, fsAlbums, fsPlaylists, fsRecent, fsFavourites, fsLastPlayed, fsMostPlayed, fsLeastPlayed, fsDownloads]
@@ -2070,6 +2214,25 @@ proc processEvents(state: var AppState) =
         state.crossfadeStarted = false
         state.crossfading = false
         state.crossfadePrepared = false
+    of aekReverbChanged:
+      state.reverbEnabled = ev.intVal != 0
+      state.reverbRoomScale = ev.floatVal
+      state.markDirty(ceSettings)
+    of aekLoudnessModeChanged:
+      state.loudnessMode = LoudnessMode(ev.intVal)
+      state.markDirty(ceSettings)
+    of aekPreGainChanged:
+      state.preGainDb = ev.floatVal
+      state.markDirty(ceSettings)
+    of aekGaplessChanged:
+      state.gapless = ev.intVal != 0
+      state.markDirty(ceSettings)
+    of aekDynamicModeChanged:
+      state.dynamicModeEnabled = ev.intVal != 0
+      state.markDirty(ceSettings)
+    of aekScrobbleConfigChanged:
+      state.scrobbleEnabled = ev.intVal != 0
+      state.markDirty(ceSettings)
     of aekCustomEvent:
       if ev.strVal == "up_next":
         let nextTitle = ev.metadata.getOrDefault("next_title", "")
@@ -2229,6 +2392,20 @@ proc fullStateSync(state: var AppState, daemonState: JsonNode) =
     state.crossfadeCurve = CrossfadeCurveType(daemonState["crossfadeCurve"].getInt(1))
   if daemonState.hasKey("shuffleIndex"):
     state.shuffleIndex = daemonState["shuffleIndex"].getInt(0)
+  if daemonState.hasKey("gapless"):
+    state.gapless = daemonState["gapless"].getBool(false)
+  if daemonState.hasKey("loudness_mode"):
+    state.loudnessMode = LoudnessMode(daemonState["loudness_mode"].getInt(0))
+  if daemonState.hasKey("pre_gain_db"):
+    state.preGainDb = daemonState["pre_gain_db"].getFloat(-14.0)
+  if daemonState.hasKey("reverb_enabled"):
+    state.reverbEnabled = daemonState["reverb_enabled"].getBool(false)
+  if daemonState.hasKey("reverb_room_scale"):
+    state.reverbRoomScale = daemonState["reverb_room_scale"].getFloat(0.7)
+  if daemonState.hasKey("dynamic_mode"):
+    state.dynamicModeEnabled = daemonState["dynamic_mode"].getBool(false)
+  if daemonState.hasKey("scrobble_enabled"):
+    state.scrobbleEnabled = daemonState["scrobble_enabled"].getBool(false)
 
 proc runTui(args: seq[string]) =
   terminal.enableTrueColors()

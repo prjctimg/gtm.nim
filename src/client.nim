@@ -166,6 +166,23 @@ proc drainEventLines(cli: DaemonClient, buf: var string) =
       of aekSleepTimerTick:
         ev.intVal = j{"remaining_secs"}.getInt(0)
       of aekSleepTimerExpired: discard
+      of aekReverbChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
+        ev.floatVal = j{"room_scale"}.getFloat(0.7)
+      of aekLoudnessModeChanged:
+        case j{"mode"}.getStr("off")
+        of "track": ev.intVal = 1
+        of "album": ev.intVal = 2
+        of "auto": ev.intVal = 3
+        else: ev.intVal = 0
+      of aekPreGainChanged:
+        ev.floatVal = j{"pre_gain_db"}.getFloat(-14.0)
+      of aekGaplessChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
+      of aekDynamicModeChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
+      of aekScrobbleConfigChanged:
+        ev.intVal = if j{"enabled"}.getBool(false): 1 else: 0
       of aekCustomEvent:
         ev.strVal = j{"name"}.getStr("")
         if j.hasKey("shuffleIndex"):
@@ -402,6 +419,23 @@ method pollEvents*(cli: DaemonClient): seq[AudioEvent] =
             ev.metadata["track_channel"] = track{"artist"}.getStr("")
           ev.floatVal = json{"time_pos"}.getFloat(0.0)
         of aekMetadataChanged: ev.strVal = json{"name"}.getStr("")
+        of aekReverbChanged:
+          ev.intVal = if json{"enabled"}.getBool(false): 1 else: 0
+          ev.floatVal = json{"room_scale"}.getFloat(0.7)
+        of aekLoudnessModeChanged:
+          case json{"mode"}.getStr("off")
+          of "track": ev.intVal = 1
+          of "album": ev.intVal = 2
+          of "auto": ev.intVal = 3
+          else: ev.intVal = 0
+        of aekPreGainChanged:
+          ev.floatVal = json{"pre_gain_db"}.getFloat(-14.0)
+        of aekGaplessChanged:
+          ev.intVal = if json{"enabled"}.getBool(false): 1 else: 0
+        of aekDynamicModeChanged:
+          ev.intVal = if json{"enabled"}.getBool(false): 1 else: 0
+        of aekScrobbleConfigChanged:
+          ev.intVal = if json{"enabled"}.getBool(false): 1 else: 0
         of aekCustomEvent:
           ev.strVal = json{"name"}.getStr("")
           if json.hasKey("shuffleIndex"):
@@ -539,6 +573,12 @@ proc updateTrackPath*(cli: DaemonClient, oldPath, newPath, newTitle: string): Js
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "library", "action": "update_metadata", "old_path": oldPath, "new_path": newPath, "title": newTitle})
 
+proc updateTrackMetadata*(cli: DaemonClient, trackId: int64, title, artist, album, genre: string, year, trackNum: int): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": "update_metadata", "track_id": trackId,
+    "title": title, "artist": artist, "album": album, "genre": genre,
+    "year": year, "track_number": trackNum})
+
 proc scanDir*(cli: DaemonClient, path: string): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "library", "action": "scan", "path": path})
@@ -658,15 +698,18 @@ proc getEqPresets*(cli: DaemonClient): JsonNode =
 
 proc setReverb*(cli: DaemonClient, enabled: bool, roomScale: float): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "set_reverb", "enabled": enabled, "room_scale": roomScale})
+  sendDaemonCmd(cli, %*{"cmd": "set_reverb", "enabled": enabled, "room_size": roomScale})
 
 proc setLoudnessMode*(cli: DaemonClient, mode: string): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "set_loudness_mode", "mode": mode})
 
-proc scanLoudness*(cli: DaemonClient, force: bool = false): JsonNode =
+proc scanLoudness*(cli: DaemonClient, force: bool = false, trackIds: seq[int64] = @[]): JsonNode =
   cli.ensureDaemon()
-  sendDaemonCmd(cli, %*{"cmd": "scan_loudness", "force": force})
+  if trackIds.len > 0:
+    sendDaemonCmd(cli, %*{"cmd": "scan_loudness", "force": force, "track_ids": trackIds})
+  else:
+    sendDaemonCmd(cli, %*{"cmd": "scan_loudness", "force": force})
 
 proc setPreGain*(cli: DaemonClient, preGainDb: float): JsonNode =
   cli.ensureDaemon()

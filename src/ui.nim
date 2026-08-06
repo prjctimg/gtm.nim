@@ -223,7 +223,7 @@ method render*(node: TabBar, ctx: var nw.Context[AppState]) =
 var gCursorX, gCursorY: int = -1
 
 proc showInputCursor*(state: var AppState, w, h: int) =
-  let shouldShow = state.overlay.kind in {okYtSearch, okCommandPalette, okThemePicker, okQueuePicker, okPlaylistSearch, okQueueOverlay, okFuzzyFinder} or
+  let shouldShow = state.overlay.kind in {okYtSearch, okCommandPalette, okThemePicker, okQueuePicker, okPlaylistSearch, okQueueOverlay, okFuzzyFinder, okMetadataEditor} or
     (state.overlay.kind == okNone and (state.playlistInputActive or state.mode == imFilter or state.mode == imLeaderMode))
   if shouldShow == state.cursorVisible: return
   state.cursorVisible = shouldShow
@@ -231,13 +231,20 @@ proc showInputCursor*(state: var AppState, w, h: int) =
     var cx = 1
     var cy = 1
     case state.overlay.kind
-    of okYtSearch, okCommandPalette, okThemePicker, okQueuePicker, okPlaylistSearch, okQueueOverlay:
+    of okYtSearch, okCommandPalette, okThemePicker, okQueuePicker, okPlaylistSearch, okQueueOverlay, okFuzzyFinder:
       let boxW = min(60, w - 4)
       let boxH = min(h - 4, 20)
       let boxX = (w - boxW) div 2
       let boxY = (h - boxH) div 2
       cx = boxX + 4
       cy = boxY + 2
+    of okMetadataEditor:
+      let boxW = min(50, w - 8)
+      let boxH = min(22, h - 4)
+      let boxX = (w - boxW) div 2
+      let boxY = (h - boxH) div 2
+      cx = boxX + 14 + min(state.overlay.mdBuffer.runeLen, boxW - 17)
+      cy = boxY + 3 + state.overlay.mdField
     of okNone:
       if state.playlistInputActive:
         let boxW = min(50, w - 8)
@@ -660,6 +667,40 @@ method render*(node: SettingsView, ctx: var nw.Context[AppState]) =
     else:
       writeStr(ctx.tb, contentX + contentW - 12, line, "[○] Disconnected", theme.red)
     line.inc
+    settingsRow("Gapless")
+    toggleWidget(state.gapless)
+    line.inc
+    settingsRow("Loudness Mode")
+    let loudNames = ["Off", "Track", "Album", "Auto"]
+    let loudIdx = state.loudnessMode.ord
+    let loudLabel = if loudIdx >= 0 and loudIdx < loudNames.len: loudNames[loudIdx] else: "Off"
+    writeStr(ctx.tb, contentX + contentW - loudLabel.runeLen - 11, line, "[ " & loudLabel & " ▸]", theme.subtext0)
+    line.inc
+    settingsRow("Pre-Gain")
+    let pgLabel = $(int(state.preGainDb)) & " dB"
+    writeStr(ctx.tb, contentX + contentW - pgLabel.runeLen - 12, line, pgLabel, theme.subtext0)
+    line.inc
+    settingsRow("Reverb")
+    toggleWidget(state.reverbEnabled)
+    line.inc
+    settingsRow("Reverb Room Scale")
+    sliderWidget(int(state.reverbRoomScale * 100.0), 100, 14)
+    line.inc
+    settingsRow("Dynamic Mode")
+    toggleWidget(state.dynamicModeEnabled)
+    line.inc
+    settingsRow("Scrobble")
+    toggleWidget(state.scrobbleEnabled)
+    line.inc
+    settingsRow("Scan Loudness")
+    writeStr(ctx.tb, contentX + contentW - 8, line, "[Scan]", theme.peach)
+    line.inc
+    settingsRow("Sync Covers")
+    writeStr(ctx.tb, contentX + contentW - 8, line, "[Sync]", theme.peach)
+    line.inc
+    settingsRow("Sync Lyrics")
+    writeStr(ctx.tb, contentX + contentW - 8, line, "[Sync]", theme.peach)
+    line.inc
   of scYouTube:
     sectionHeader("═══ YouTube ═══")
     settingsRow("Cookie Source")
@@ -960,6 +1001,9 @@ method render*(node: GenericOverlay, ctx: var nw.Context[AppState]) =
   of okFuzzyFinder:
     title = "Fuzzy Finder"
     queryLine = true
+  of okMetadataEditor:
+    title = "Edit Metadata"
+    queryLine = false
   else: return
   let boxX = (w - boxW) div 2
   let boxY = (h - boxH) div 2
@@ -1096,6 +1140,25 @@ method render*(node: GenericOverlay, ctx: var nw.Context[AppState]) =
       "Enter: toggle  x: remove from playlist  Esc: cancel"
     let ft = truncateAt(footer, boxW - 2)
     if ft.len > 0: writeStr(ctx.tb, boxX + 1, boxY + boxH - 1, ft, theme.subtext0)
+  #--- Metadata Editor ---
+  elif ov.kind == okMetadataEditor:
+    const mdFields = ["Title", "Artist", "Album", "Genre", "Year", "Track #"]
+    for i in 0..5:
+      let lineY = curY + i
+      if lineY >= boxY + boxH - 1: break
+      let isSelected = (i == ov.mdField)
+      let ovRowBg = if isSelected: theme.surface2 else: theme.surface0
+      fillBg(ctx.tb, boxX + 1, lineY, boxX + boxW - 2, lineY, ovRowBg)
+      ctx.tb.setBackgroundColor(ovRowBg)
+      writeStr(ctx.tb, boxX + 2, lineY, mdFields[i].alignLeft(8), if isSelected: theme.blue else: theme.subtext0)
+      let val = if isSelected and ov.mdBuffer.len > 0: ov.mdBuffer
+                elif i < ov.mdValues.len: ov.mdValues[i]
+                else: ""
+      let displayed = truncateAt(val, max(1, boxW - 16))
+      writeStr(ctx.tb, boxX + 12, lineY, "| " & displayed, theme.text)
+    ctx.tb.setBackgroundColor(theme.surface0)
+    let mdFooter = truncateAt("\u2191/\u2193:Field  Type:Edit  Enter:Next/Save  Esc:Cancel", boxW - 2)
+    if mdFooter.len > 0: writeStr(ctx.tb, boxX + 1, boxY + boxH - 1, mdFooter, theme.subtext0)
   #--- Theme Picker ---
   elif ov.kind == okThemePicker:
     let displayResults = min(12, ov.strResults.len)

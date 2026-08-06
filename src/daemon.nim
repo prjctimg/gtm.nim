@@ -256,7 +256,7 @@ proc parseDaemonCommand(line: string): DaemonCmd =
     of "set_reverb":
       result.kind = dckSetReverb
       result.intArg = if j{"enabled"}.getBool(false): 1 else: 0
-      result.floatArg = j{"room_scale"}.getFloat(0.7)
+      result.floatArg = j{"room_size"}.getFloat(j{"room_scale"}.getFloat(0.7))
     of "set_loudness_mode":
       result.kind = dckSetLoudnessMode
       case j{"mode"}.getStr("off")
@@ -1145,6 +1145,13 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
     result["shuffle"] = %d.shuffleEnabled
     result["repeat"] = %d.repeatMode
     result["track_path"] = %d.currentTrackPath
+    result["gapless"] = %d.state.gapless
+    result["loudness_mode"] = %d.state.loudnessMode.ord
+    result["pre_gain_db"] = %d.state.preGainDb
+    result["reverb_enabled"] = %d.state.reverb.enabled
+    result["reverb_room_scale"] = %d.state.reverb.roomScale
+    result["dynamic_mode"] = %d.state.dynamicMode.enabled
+    result["scrobble_enabled"] = %d.state.scrobble.enabled
     if d.currentTrackTitle.len > 0:
       result["track_title"] = %d.currentTrackTitle
     elif d.currentTrackPath.contains("youtube.com") or d.currentTrackPath.contains("googlevideo.com"):
@@ -1212,6 +1219,14 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
         "easing": d.state.crossfade.easing},
       "eq_preset": d.state.eqPreset,
       "eq_enabled": d.state.eqEnabled,
+      "gapless": d.state.gapless,
+      "loudness_mode": d.state.loudnessMode.ord,
+      "pre_gain_db": d.state.preGainDb,
+      "reverb": %*{"enabled": d.state.reverb.enabled, "room_scale": d.state.reverb.roomScale,
+        "damping": d.state.reverb.damping, "pre_delay": d.state.reverb.preDelay,
+        "wet": d.state.reverb.wet, "dry": d.state.reverb.dry},
+      "dynamic_mode": d.state.dynamicMode.enabled,
+      "scrobble": d.state.scrobble.enabled,
       "queue": qArr,
       "queue_cursor": d.state.queueCursor
     }
@@ -1461,11 +1476,15 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
         result["already_running"] = %true
       else:
         let force = cmd.intArg != 0
+        var idFilter: seq[int64] = @[]
+        if cmdJson != nil and cmdJson{"track_ids"} != nil and cmdJson{"track_ids"}.kind == JArray:
+          for it in cmdJson{"track_ids"}.items:
+            idFilter.add(int64(it.getInt(0)))
         d.loudnessScanActive = true
         d.loudnessScanIdx = 0
         d.loudnessScanTrackIds = @[]
         for t in d.lib.getTracksNeedingLoudness(force):
-          if fileExists(t.path):
+          if fileExists(t.path) and (idFilter.len == 0 or t.id in idFilter):
             d.loudnessScanTrackIds.add(t.id)
         d.loudnessScanTotal = d.loudnessScanTrackIds.len
         result["started"] = %true
@@ -2166,6 +2185,8 @@ proc runDaemon*() =
       daemon.coverSyncActive = false
       daemon.broadcastEvent(%*{"event": "custom", "name": "sync_covers_done",
         "total": %daemon.coverSyncTotal, "found": %daemon.coverSyncFound})
+      daemon.broadcastEvent(%*{"event": "custom", "name": "covers_synced",
+        "total": %daemon.coverSyncTotal, "found": %daemon.coverSyncFound})
     # Background lyrics sync: process up to 3 tracks per iteration
     if daemon.lyricsSyncActive and daemon.lyricsSyncIdx < daemon.lyricsSyncTracks.len:
       let batchEnd = min(daemon.lyricsSyncIdx + 3, daemon.lyricsSyncTracks.len)
@@ -2185,6 +2206,8 @@ proc runDaemon*() =
       daemon.lyricsSyncActive = false
       daemon.broadcastEvent(%*{"event": "custom", "name": "sync_lyrics_done",
         "total": %daemon.lyricsSyncTotal, "found": %daemon.lyricsSyncFound})
+      daemon.broadcastEvent(%*{"event": "custom", "name": "lyrics_synced",
+        "total": %daemon.lyricsSyncTotal, "found": %daemon.lyricsSyncFound})
     # Background loudness scan: process up to 3 tracks per iteration
     if daemon.loudnessScanActive and daemon.loudnessScanIdx < daemon.loudnessScanTrackIds.len:
       let batchEnd = min(daemon.loudnessScanIdx + 3, daemon.loudnessScanTrackIds.len)
@@ -2202,9 +2225,13 @@ proc runDaemon*() =
       let ev = %*{"event": "custom", "name": "scan_loudness_progress",
         "processed": %daemon.loudnessScanIdx, "total": %daemon.loudnessScanTotal}
       daemon.broadcastEvent(ev)
+      daemon.broadcastEvent(%*{"event": "custom", "name": "loudness_scan_progress",
+        "processed": %daemon.loudnessScanIdx, "total": %daemon.loudnessScanTotal})
     if daemon.loudnessScanActive and daemon.loudnessScanIdx >= daemon.loudnessScanTrackIds.len:
       daemon.loudnessScanActive = false
       daemon.broadcastEvent(%*{"event": "custom", "name": "scan_loudness_done",
+        "total": %daemon.loudnessScanTotal})
+      daemon.broadcastEvent(%*{"event": "custom", "name": "loudness_scan_done",
         "total": %daemon.loudnessScanTotal})
     # Dynamic mode: auto-queue suggested tracks when the queue runs low
     if daemon.state.dynamicMode.enabled and daemon.player.state == 1:
