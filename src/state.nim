@@ -403,6 +403,26 @@ type
   LoudnessMode* = enum
     lmOff, lmTrack, lmAlbum, lmAuto
 
+  ReverbConfigState* = object
+    enabled*: bool
+    roomScale*: float
+    damping*: float
+    preDelay*: float
+    wet*: float
+    dry*: float
+
+  DynamicModeConfigState* = object
+    enabled*: bool
+    minQueueRemaining*: int
+    maxHistory*: int
+
+  ScrobbleConfigState* = object
+    enabled*: bool
+    apiKey*: string
+    sessionToken*: string
+    minPlaySecs*: int
+    minPlayPct*: float
+
   DaemonState* = object
     version*: uint64
     status*: PlaybackStatus
@@ -421,6 +441,10 @@ type
     eqEnabled*: bool
     loudnessMode*: LoudnessMode
     gapless*: bool
+    preGainDb*: float
+    reverb*: ReverbConfigState
+    dynamicMode*: DynamicModeConfigState
+    scrobble*: ScrobbleConfigState
 
 proc stateDir*(): string =
   # Per gtm.spec protocol.md §Socket Locations fallback chain:
@@ -462,7 +486,22 @@ proc saveDaemonState*(s: DaemonState) =
       "queue": s.queue,
       "queue_cursor": s.queueCursor,
       "gapless": s.gapless,
-      "loudness_mode": s.loudnessMode.int
+      "loudness_mode": s.loudnessMode.int,
+      "pre_gain_db": s.preGainDb,
+      "reverb_enabled": s.reverb.enabled,
+      "reverb_room_scale": s.reverb.roomScale,
+      "reverb_damping": s.reverb.damping,
+      "reverb_pre_delay": s.reverb.preDelay,
+      "reverb_wet": s.reverb.wet,
+      "reverb_dry": s.reverb.dry,
+      "dynamic_mode": s.dynamicMode.enabled,
+      "dynamic_min_queue": s.dynamicMode.minQueueRemaining,
+      "dynamic_max_history": s.dynamicMode.maxHistory,
+      "scrobble_enabled": s.scrobble.enabled,
+      "scrobble_api_key": s.scrobble.apiKey,
+      "scrobble_session_token": s.scrobble.sessionToken,
+      "scrobble_min_play_secs": s.scrobble.minPlaySecs,
+      "scrobble_min_play_pct": s.scrobble.minPlayPct
     }
     writeFile(statePath(), $j)
   except:
@@ -474,7 +513,13 @@ proc loadDaemonState*(): DaemonState =
     shuffle: false, repeat: "off", mute: false,
     crossfade: CrossfadeConfigState(enabled: false, durationSecs: 5, easing: "equal_power"),
     eqPreset: "flat", eqEnabled: false,
-    loudnessMode: lmOff, gapless: true
+    loudnessMode: lmOff, gapless: true,
+    preGainDb: -14.0,
+    reverb: ReverbConfigState(enabled: false, roomScale: 0.7, damping: 0.5,
+      preDelay: 0.02, wet: 0.3, dry: 0.7),
+    dynamicMode: DynamicModeConfigState(enabled: false, minQueueRemaining: 3, maxHistory: 50),
+    scrobble: ScrobbleConfigState(enabled: false, apiKey: "", sessionToken: "",
+      minPlaySecs: 240, minPlayPct: 0.5)
   )
   let p = statePath()
   if not fileExists(p): return
@@ -491,6 +536,21 @@ proc loadDaemonState*(): DaemonState =
     result.eqEnabled = j{"eq_enabled"}.getBool(false)
     result.gapless = j{"gapless"}.getBool(true)
     result.loudnessMode = j{"loudness_mode"}.getInt(0).LoudnessMode
+    result.preGainDb = j{"pre_gain_db"}.getFloat(-14.0)
+    result.reverb.enabled = j{"reverb_enabled"}.getBool(false)
+    result.reverb.roomScale = j{"reverb_room_scale"}.getFloat(0.7)
+    result.reverb.damping = j{"reverb_damping"}.getFloat(0.5)
+    result.reverb.preDelay = j{"reverb_pre_delay"}.getFloat(0.02)
+    result.reverb.wet = j{"reverb_wet"}.getFloat(0.3)
+    result.reverb.dry = j{"reverb_dry"}.getFloat(0.7)
+    result.dynamicMode.enabled = j{"dynamic_mode"}.getBool(false)
+    result.dynamicMode.minQueueRemaining = j{"dynamic_min_queue"}.getInt(3)
+    result.dynamicMode.maxHistory = j{"dynamic_max_history"}.getInt(50)
+    result.scrobble.enabled = j{"scrobble_enabled"}.getBool(false)
+    result.scrobble.apiKey = j{"scrobble_api_key"}.getStr("")
+    result.scrobble.sessionToken = j{"scrobble_session_token"}.getStr("")
+    result.scrobble.minPlaySecs = j{"scrobble_min_play_secs"}.getInt(240)
+    result.scrobble.minPlayPct = j{"scrobble_min_play_pct"}.getFloat(0.5)
     if j.hasKey("queue") and j["queue"].kind == JArray:
       for item in j["queue"]:
         if item.kind == JString:

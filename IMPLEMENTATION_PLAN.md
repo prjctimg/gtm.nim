@@ -19,6 +19,8 @@ Prioritized items yet to implement, based on comparison of `implementation.md` p
 
 ## P0 — Completed
 
+- [x] **WS3 — v2 audio/media features (2026-08-06)**: `set_reverb`, `set_loudness_mode`, `set_pre_gain`, `scan_loudness` (EBU R128 background scan), `set_gapless` (FFmpeg mixer promotion + daemon bookkeeping), `set_dynamic_mode`, `set_scrobble` (Last.fm), `organize_library` (dry-run), `get_cover_art` (Deezer + `covers` table), `get_lyrics` (lrclib.net + `lyrics` table), background `sync_covers`/`sync_lyrics` scans. Client wrappers added to `client.nim`. IPC doc updated. See CHANGELOG `[0.5.0]`.
+
 - [x] **Activate dead daemon state fields**: Wired `playbackQueue`, `shuffleOrder`, `shuffleIndex`, `crossfadeDuration`, `crossfadePrepared`, `crossfadeStarted`, `crossfadeNextPath`, `earlyPreloaded` into `advanceToNextTrack`, crossfade scheduling in event loop, `dckSetShuffle` generates `shuffleOrder`, `dckGetFullState` returns all fields.
 - [x] **Queue IPC commands**: Added `dckQueueAdd`, `dckQueueRemove`, `dckQueueClear`, `dckQueueList`, `dckQueueSetCursor` to enum, parser, and executor. Client-side procs added to `client.nim`.
 - [x] **Daemon-side track advancement**: Added `advanceToNextTrack` proc that pops from `playbackQueue`. `dckNext` calls it instead of `stop()`. `aekTrackEnded` in event loop auto-advances.

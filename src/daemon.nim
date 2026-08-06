@@ -1,4 +1,4 @@
-import os, json, strutils, net, posix, random, osproc, times, tables
+import os, json, strutils, net, posix, random, osproc, times, tables, base64
 from nativesockets import setBlocking, selectRead, SocketHandle
 import msgpack4nim
 import msgpack4nim/msgpack2json
@@ -42,6 +42,9 @@ type
     dckCheckHealth, dckToggleMute, dckSearch,
     dckQueue, dckLibrary,
     dckQueueSetCursor,
+    dckSetReverb, dckSetLoudnessMode, dckScanLoudness, dckSetPreGain,
+    dckSetGapless, dckSetDynamicMode, dckSetScrobble,
+    dckOrganizeLibrary, dckGetCoverArt, dckGetLyrics,
     dckUnknown
 
   DaemonCmd* = object
@@ -93,6 +96,27 @@ type
     autoAdvancing*: bool
     lastConsumedFromQueue: seq[string]
     upNextSent: bool
+    gaplessPrepared: bool
+    gaplessNextPath: string
+    # Background cover/lyrics/loudness scan state
+    coverSyncActive: bool
+    coverSyncIdx: int
+    coverSyncTotal: int
+    coverSyncFound: int
+    coverSyncTracks: seq[Track]
+    lyricsSyncActive: bool
+    lyricsSyncIdx: int
+    lyricsSyncTotal: int
+    lyricsSyncFound: int
+    lyricsSyncTracks: seq[Track]
+    loudnessScanActive: bool
+    loudnessScanIdx: int
+    loudnessScanTotal: int
+    loudnessScanTrackIds: seq[int64]
+    # Scrobble tracking: track ids already scrobbled during this playback session
+    scrobbledThisSession: seq[int64]
+    lastScrobbleCheckFrames: int
+    dynamicAutoQueuing: bool
     # Background scan state
     scanningDir: string
     scanningFiles: seq[string]
@@ -229,6 +253,38 @@ proc parseDaemonCommand(line: string): DaemonCmd =
     of "yt_clear_search_history": result.kind = dckYtClearSearchHistory
     of "list_eq_presets": result.kind = dckListEqPresets
     of "toggle_mute": result.kind = dckToggleMute
+    of "set_reverb":
+      result.kind = dckSetReverb
+      result.intArg = if j{"enabled"}.getBool(false): 1 else: 0
+      result.floatArg = j{"room_scale"}.getFloat(0.7)
+    of "set_loudness_mode":
+      result.kind = dckSetLoudnessMode
+      case j{"mode"}.getStr("off")
+      of "track": result.intArg = 1
+      of "album": result.intArg = 2
+      of "auto": result.intArg = 3
+      else: result.intArg = 0
+    of "scan_loudness":
+      result.kind = dckScanLoudness
+      result.intArg = if j{"force"}.getBool(false): 1 else: 0
+    of "set_pre_gain":
+      result.kind = dckSetPreGain; result.floatArg = j{"pre_gain_db"}.getFloat(-14.0)
+    of "set_gapless":
+      result.kind = dckSetGapless
+      result.intArg = if j{"enabled"}.getBool(false): 1 else: 0
+    of "set_dynamic_mode":
+      result.kind = dckSetDynamicMode
+      result.intArg = if j{"enabled"}.getBool(false): 1 else: 0
+    of "set_scrobble":
+      result.kind = dckSetScrobble
+      result.intArg = if j{"enabled"}.getBool(false): 1 else: 0
+    of "organize_library":
+      result.kind = dckOrganizeLibrary
+      result.intArg = if j{"dry_run"}.getBool(true): 1 else: 0
+    of "get_cover_art":
+      result.kind = dckGetCoverArt; result.intArg = j{"track_id"}.getInt(0)
+    of "get_lyrics":
+      result.kind = dckGetLyrics; result.intArg = j{"track_id"}.getInt(0)
     of "search":
       result.kind = dckSearch; result.strArg = j{"query"}.getStr("")
     of "check_health": result.kind = dckCheckHealth
@@ -279,6 +335,14 @@ proc serializeEvents(events: seq[AudioEvent]; d: Daemon = nil): seq[string] =
     of aekEqEnabledChanged: obj["enabled"] = %ev.intVal
     of aekSleepTimerTick: obj["remaining_secs"] = %ev.intVal
     of aekSleepTimerExpired: discard
+    of aekReverbChanged: discard
+    of aekLoudnessModeChanged: obj["mode"] = %ev.strVal
+    of aekPreGainChanged: obj["pre_gain_db"] = %ev.floatVal
+    of aekGaplessChanged: obj["enabled"] = %ev.intVal
+    of aekDynamicModeChanged:
+      obj["enabled"] = %ev.intVal
+      obj["min_queue_remaining"] = %ev.floatVal
+    of aekScrobbleConfigChanged: obj["enabled"] = %ev.intVal
     else: discard
     result.add($obj)
 
@@ -726,9 +790,76 @@ proc executeLibraryCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNo
       let oldPath = cmdJson{"old_path"}.getStr("")
       let newPath = cmdJson{"new_path"}.getStr("")
       let newTitle = cmdJson{"title"}.getStr("")
+      let trackId = int64(cmdJson{"track_id"}.getInt(0))
       if oldPath.len > 0 and newPath.len > 0:
         d.lib.updateTrackPath(oldPath, newPath, newTitle)
         result["updated"] = %true
+      elif trackId > 0:
+        let artist = cmdJson{"artist"}.getStr("")
+        let album = cmdJson{"album"}.getStr("")
+        let genre = cmdJson{"genre"}.getStr("")
+        let year = cmdJson{"year"}.getInt(0)
+        let trackNum = cmdJson{"track_number"}.getInt(0)
+        d.lib.updateTrackMetadata(trackId, newTitle, artist, album, genre, year, trackNum)
+        result["updated"] = %true
+  of "get_recent":
+    if d.lib != nil:
+      let count = cmdJson{"count"}.getInt(20)
+      let recent = d.lib.getRecent(count)
+      var arr = newJArray()
+      for t in recent:
+        arr.add(%*{"id": %t.id, "path": %t.path, "title": %t.title,
+          "artist": %t.artist, "album": %t.album, "duration": %t.duration,
+          "last_played": %t.lastPlayed})
+      result["tracks"] = arr
+  of "remove_track":
+    if d.lib != nil:
+      let trackId = int64(cmdJson{"id"}.getInt(0))
+      if trackId > 0:
+        d.lib.removeTrack(trackId)
+        result["removed"] = %true
+  of "import_m3u":
+    if d.lib != nil:
+      let path = cmdJson{"path"}.getStr("")
+      if path.len > 0 and fileExists(path):
+        let playlistId = d.lib.importM3u(path)
+        result["playlist_id"] = %playlistId
+      else:
+        result["ok"] = %false
+        result["error"] = %"m3u file not found"
+  of "export_m3u":
+    if d.lib != nil:
+      let playlistId = int64(cmdJson{"playlist_id"}.getInt(0))
+      let path = cmdJson{"path"}.getStr("")
+      if playlistId > 0 and path.len > 0:
+        result["exported"] = %d.lib.exportM3u(playlistId, path)
+      else:
+        result["ok"] = %false
+        result["error"] = %"playlist_id and path required"
+  of "sync_covers":
+    if d.lib != nil:
+      if d.coverSyncActive:
+        result["already_running"] = %true
+      else:
+        d.coverSyncActive = true
+        d.coverSyncIdx = 0
+        d.coverSyncFound = 0
+        d.coverSyncTracks = d.lib.getTracksMissingCover()
+        d.coverSyncTotal = d.coverSyncTracks.len
+        result["started"] = %true
+        result["pending_tracks"] = %d.coverSyncTotal
+  of "sync_lyrics":
+    if d.lib != nil:
+      if d.lyricsSyncActive:
+        result["already_running"] = %true
+      else:
+        d.lyricsSyncActive = true
+        d.lyricsSyncIdx = 0
+        d.lyricsSyncFound = 0
+        d.lyricsSyncTracks = d.lib.getTracksMissingLyrics()
+        d.lyricsSyncTotal = d.lyricsSyncTracks.len
+        result["started"] = %true
+        result["pending_tracks"] = %d.lyricsSyncTotal
   of "search":
     if d.lib != nil:
       let query = cmdJson{"query"}.getStr("")
@@ -742,6 +873,138 @@ proc executeLibraryCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNo
   else:
     result["ok"] = %false
     result["error"] = %("unknown library action: " & action)
+
+proc sanitizeComponent(s: string): string =
+  for c in s:
+    if c in {'/', '\\', ':', '*', '?', '"', '<', '>', '|'} or ord(c) < 32:
+      result.add('_')
+    else:
+      result.add(c)
+  result = result.strip()
+
+proc formatTrackNum(n: int): string =
+  result = $n
+  if n < 10:
+    result = "0" & result
+
+proc urlEncode(s: string): string =
+  const hexChars = "0123456789ABCDEF"
+  for c in s:
+    if c in {'a'..'z', 'A'..'Z', '0'..'9', '-', '_', '.', '~'}:
+      result.add(c)
+    else:
+      result.add('%' & hexChars[(ord(c) shr 4) and 0xF] & hexChars[ord(c) and 0xF])
+
+proc fetchUrl(url: string, maxTime: int = 20): string =
+  try:
+    let (outp, code) = execCmdEx("curl -sL --max-time " & $maxTime & " " & quoteShell(url))
+    if code == 0: result = outp
+  except CatchableError: discard
+
+proc analyzeLoudness(path: string): tuple[iLufs, truePeak, lra: float] =
+  result = (0.0, 0.0, 0.0)
+  try:
+    let (outp, code) = execCmdEx("ffmpeg -nostats -i " & quoteShell(path) & " -af ebur128 -f null - 2>&1")
+    if code != 0: return
+    for line in outp.splitLines():
+      let l = line.strip()
+      if l.startsWith("I:"):
+        let parts = l.splitWhitespace()
+        if parts.len >= 2:
+          try:
+            result.iLufs = parts[1].parseFloat()
+            break
+          except: discard
+    for line in outp.splitLines():
+      let l = line.strip()
+      if l.startsWith("LRA:"):
+        let parts = l.splitWhitespace()
+        if parts.len >= 2:
+          try: result.lra = parts[1].parseFloat() except: discard
+      elif l.startsWith("True peak:"):
+        let parts = l.splitWhitespace()
+        if parts.len >= 3:
+          try: result.truePeak = parts[2].parseFloat() except: discard
+  except CatchableError: discard
+
+proc parseLrcLines(content: string): JsonNode =
+  result = newJArray()
+  for line in content.splitLines():
+    let trimmed = line.strip()
+    if trimmed.len == 0: continue
+    # [mm:ss.xx] lyric text
+    let closeBracket = trimmed.find(']')
+    if closeBracket > 0 and trimmed[0] == '[':
+      let timeStr = trimmed[1..<closeBracket]
+      let text = trimmed[closeBracket+1..^1].strip()
+      var parts = timeStr.split(':')
+      if parts.len == 2:
+        try:
+          let mins = parts[0].parseFloat()
+          let secs = parts[1].parseFloat()
+          result.add(%*{"time": mins * 60.0 + secs, "text": text})
+        except: discard
+    else:
+      result.add(%*{"time": -1.0, "text": trimmed})
+
+proc submitScrobble(apiKey, sessionToken, artist, title, album: string, duration: int): tuple[ok: bool, err: string] =
+  result = (false, "not configured")
+  if apiKey.len == 0 or sessionToken.len == 0: return
+  let timestamp = $int(epochTime())
+  let pairs = [
+    ("method", "track.scrobble"), ("api_key", apiKey), ("sk", sessionToken),
+    ("artist", artist), ("track", title), ("album", album),
+    ("duration", $duration), ("timestamp", timestamp), ("format", "json")
+  ]
+  var body = ""
+  for i, (k, v) in pairs:
+    if i > 0: body.add("&")
+    body.add(urlEncode(k) & "=" & urlEncode(v))
+  try:
+    let (outp, code) = execCmdEx("curl -sL --max-time 20 -X POST --data " & quoteShell(body) & " https://ws.audioscrobbler.com/2.0/")
+    if code != 0:
+      result = (false, "curl failed")
+      return
+    let j = try: parseJson(outp) except CatchableError: nil
+    if j != nil and j{"error"}.isNil:
+      result = (true, "")
+    else:
+      result = (false, "Last.fm rejected the scrobble (api_sig requires shared secret)")
+  except CatchableError:
+    result = (false, "scrobble error")
+
+proc fetchCoverForTrack(t: Track): string =
+  # Returns base64 PNG, or "" if not found
+  if t.title.len == 0 and t.artist.len == 0: return ""
+  var query = urlEncode(t.title)
+  if t.artist.len > 0:
+    query = urlEncode(t.artist) & "%20" & query
+  let jsonStr = fetchUrl("https://api.deezer.com/search?q=" & query & "&limit=1", 15)
+  if jsonStr.len == 0: return ""
+  let j = try: parseJson(jsonStr) except CatchableError: return ""
+  if j{"data"}.isNil or j["data"].kind != JArray or j["data"].len == 0: return ""
+  let coverUrl = j["data"][0]{"album"}{"cover_big"}.getStr("")
+  if coverUrl.len == 0: return ""
+  let img = fetchUrl(coverUrl, 15)
+  if img.len == 0: return ""
+  result = base64.encode(img)
+
+proc fetchLyricsForTrack(t: Track): tuple[content: string, synced: bool] =
+  if t.title.len == 0: return
+  let url = "https://lrclib.net/api/search?artist_name=" & urlEncode(t.artist) &
+    "&track_name=" & urlEncode(t.title) & "&synced=true"
+  let jsonStr = fetchUrl(url, 15)
+  if jsonStr.len == 0: return
+  let j = try: parseJson(jsonStr) except CatchableError: return
+  if j.kind != JArray or j.len == 0: return
+  let entry = j[0]
+  let synced = entry{"syncedLyrics"}.getStr("")
+  if synced.len > 0:
+    result = (synced, true)
+  else:
+    let plain = entry{"plainLyrics"}.getStr("")
+    if plain.len > 0:
+      result = (plain, false)
 
 proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNode =
   result = %*{"ok": true}
@@ -1165,6 +1428,132 @@ proc executeCommand(d: Daemon, cmd: DaemonCmd, cmdJson: JsonNode = nil): JsonNod
       d.lib.clearSearchHistory()
   of dckListEqPresets:
     result["presets"] = %["Flat", "Rock", "Pop", "Classical", "Jazz", "HipHop", "Vocal", "BassBoost", "Headphones", "Laptop"]
+  of dckSetReverb:
+    let enabled = cmd.intArg != 0
+    d.state.reverb.enabled = enabled
+    if cmdJson != nil:
+      if cmdJson.hasKey("room_scale"): d.state.reverb.roomScale = cmdJson["room_scale"].getFloat(d.state.reverb.roomScale)
+      if cmdJson.hasKey("damping"): d.state.reverb.damping = cmdJson["damping"].getFloat(d.state.reverb.damping)
+      if cmdJson.hasKey("pre_delay"): d.state.reverb.preDelay = cmdJson["pre_delay"].getFloat(d.state.reverb.preDelay)
+      if cmdJson.hasKey("wet"): d.state.reverb.wet = cmdJson["wet"].getFloat(d.state.reverb.wet)
+      if cmdJson.hasKey("dry"): d.state.reverb.dry = cmdJson["dry"].getFloat(d.state.reverb.dry)
+    d.state.saveDaemonState()
+    result["reverb"] = %*{"enabled": d.state.reverb.enabled,
+      "room_scale": d.state.reverb.roomScale, "damping": d.state.reverb.damping,
+      "pre_delay": d.state.reverb.preDelay, "wet": d.state.reverb.wet, "dry": d.state.reverb.dry}
+    d.broadcastEvent(%*{"event": "reverb_changed",
+      "enabled": d.state.reverb.enabled, "room_scale": d.state.reverb.roomScale,
+      "damping": d.state.reverb.damping, "pre_delay": d.state.reverb.preDelay,
+      "wet": d.state.reverb.wet, "dry": d.state.reverb.dry})
+  of dckSetLoudnessMode:
+    d.state.loudnessMode = LoudnessMode(cmd.intArg)
+    d.state.saveDaemonState()
+    let modeStr = case d.state.loudnessMode
+      of lmOff: "off"
+      of lmTrack: "track"
+      of lmAlbum: "album"
+      of lmAuto: "auto"
+    result["mode"] = %modeStr
+    d.broadcastEvent(%*{"event": "loudness_mode_changed", "mode": %modeStr})
+  of dckScanLoudness:
+    if d.lib != nil:
+      if d.loudnessScanActive:
+        result["already_running"] = %true
+      else:
+        let force = cmd.intArg != 0
+        d.loudnessScanActive = true
+        d.loudnessScanIdx = 0
+        d.loudnessScanTrackIds = @[]
+        for t in d.lib.getTracksNeedingLoudness(force):
+          if fileExists(t.path):
+            d.loudnessScanTrackIds.add(t.id)
+        d.loudnessScanTotal = d.loudnessScanTrackIds.len
+        result["started"] = %true
+        result["pending_tracks"] = %d.loudnessScanTotal
+  of dckSetPreGain:
+    d.state.preGainDb = cmd.floatArg
+    d.state.saveDaemonState()
+    result["pre_gain_db"] = %d.state.preGainDb
+    d.broadcastEvent(%*{"event": "pre_gain_changed", "pre_gain_db": %d.state.preGainDb})
+  of dckSetGapless:
+    d.state.gapless = cmd.intArg != 0
+    d.state.saveDaemonState()
+    if not d.state.gapless:
+      d.gaplessPrepared = false
+      d.gaplessNextPath = ""
+    result["enabled"] = %d.state.gapless
+    d.broadcastEvent(%*{"event": "gapless_changed", "enabled": %d.state.gapless})
+  of dckSetDynamicMode:
+    d.state.dynamicMode.enabled = cmd.intArg != 0
+    if cmdJson != nil:
+      if cmdJson.hasKey("min_queue_remaining"):
+        d.state.dynamicMode.minQueueRemaining = max(1, cmdJson["min_queue_remaining"].getInt(d.state.dynamicMode.minQueueRemaining))
+      if cmdJson.hasKey("max_history"):
+        d.state.dynamicMode.maxHistory = max(1, cmdJson["max_history"].getInt(d.state.dynamicMode.maxHistory))
+    d.state.saveDaemonState()
+    result["enabled"] = %d.state.dynamicMode.enabled
+    result["min_queue_remaining"] = %d.state.dynamicMode.minQueueRemaining
+    result["max_history"] = %d.state.dynamicMode.maxHistory
+    d.broadcastEvent(%*{"event": "dynamic_mode_changed",
+      "enabled": d.state.dynamicMode.enabled,
+      "min_queue_remaining": d.state.dynamicMode.minQueueRemaining,
+      "max_history": d.state.dynamicMode.maxHistory})
+  of dckSetScrobble:
+    d.state.scrobble.enabled = cmd.intArg != 0
+    if cmdJson != nil:
+      if cmdJson.hasKey("api_key"): d.state.scrobble.apiKey = cmdJson["api_key"].getStr(d.state.scrobble.apiKey)
+      if cmdJson.hasKey("session_token"): d.state.scrobble.sessionToken = cmdJson["session_token"].getStr(d.state.scrobble.sessionToken)
+      if cmdJson.hasKey("min_play_secs"): d.state.scrobble.minPlaySecs = cmdJson["min_play_secs"].getInt(d.state.scrobble.minPlaySecs)
+      if cmdJson.hasKey("min_play_pct"): d.state.scrobble.minPlayPct = cmdJson["min_play_pct"].getFloat(d.state.scrobble.minPlayPct)
+    d.state.saveDaemonState()
+    result["enabled"] = %d.state.scrobble.enabled
+    d.broadcastEvent(%*{"event": "scrobble_config_changed", "enabled": d.state.scrobble.enabled})
+  of dckOrganizeLibrary:
+    if d.lib != nil:
+      let dryRun = cmd.intArg != 0
+      var movesArr = newJArray()
+      for t in d.lib.loadTracks():
+        if not fileExists(t.path): continue
+        let ext = t.path.splitFile().ext
+        let artist = sanitizeComponent(if t.artist.len > 0: t.artist else: "Unknown Artist")
+        let album = sanitizeComponent(if t.album.len > 0: t.album else: "Unknown Album")
+        let title = sanitizeComponent(if t.title.len > 0: t.title else: t.path.splitFile().name)
+        let numStr = if t.trackNum > 0: formatTrackNum(t.trackNum) else: ""
+        let relDir = artist / album
+        let baseName = if numStr.len > 0: numStr & " - " & title else: title
+        let target = dataDir() / "library" / relDir / (baseName & ext)
+        if target == t.path: continue
+        movesArr.add(%*{"from": t.path, "to": target})
+      result["moves"] = movesArr
+      result["dry_run"] = %dryRun
+      if not dryRun:
+        for m in movesArr:
+          let fromPath = m{"from"}.getStr("")
+          let toPath = m{"to"}.getStr("")
+          try:
+            if not dirExists(toPath.parentDir()): createDir(toPath.parentDir())
+            if fileExists(fromPath):
+              moveFile(fromPath, toPath)
+              if d.lib != nil:
+                d.lib.updateTrackPath(fromPath, toPath, "")
+          except: discard
+        d.broadcastEvent(%*{"event": "custom", "name": "library_organized"})
+  of dckGetCoverArt:
+    if d.lib != nil:
+      let trackId = int64(cmd.intArg)
+      let data = d.lib.getCoverArt(trackId)
+      if data.len > 0:
+        result["data"] = %data
+      else:
+        result["data"] = newJNull()
+  of dckGetLyrics:
+    if d.lib != nil:
+      let trackId = int64(cmd.intArg)
+      let lyrics = d.lib.getLyrics(trackId)
+      if lyrics.content.len > 0:
+        result["lyrics"] = %*{"synced": lyrics.synced, "lines": parseLrcLines(lyrics.content)}
+      else:
+        result["lyrics"] = newJNull()
   of dckToggleMute:
     if d.player.volume > 0:
       d.player.setVolume(0)
@@ -1368,6 +1757,7 @@ proc runDaemon*() =
           let (ftitle, fartist) = parseFilenameForMetadata(p)
           discard daemon.lib.addTrack(p, ftitle, fartist, "", 0.0, 0, 0, "")
   # Sync DaemonState from restored fields
+  daemon.state = loadDaemonState()
   daemon.state.version = 0
   daemon.state.status = case daemon.player.state
     of 1: psPlaying
@@ -1549,6 +1939,22 @@ proc runDaemon*() =
           daemon.crossfadeConsumed = false
           daemon.crossfadeNextPath = ""
           daemon.sendQueueEvent()
+        elif daemon.gaplessNextPath.len > 0:
+          # Gapless: the mixer already promoted the slave to master at EOF,
+          # so do not reload the track — only fix up bookkeeping.
+          discard daemon.nextTrackFromQueue()
+          daemon.pushTrackHistory(daemon.gaplessNextPath)
+          daemon.currentTrackPath = daemon.gaplessNextPath
+          daemon.currentTrackTitle = ""
+          daemon.currentTrackChannel = ""
+          daemon.upNextSent = false
+          if daemon.lib != nil:
+            let gId = daemon.lib.findTrackByPath(daemon.gaplessNextPath)
+            if gId > 0:
+              daemon.lib.updatePlayCount(gId)
+          daemon.gaplessPrepared = false
+          daemon.gaplessNextPath = ""
+          daemon.sendQueueEvent()
         elif daemon.playbackQueue.len > 0:
           discard daemon.advanceToNextTrack(true)
           daemon.sendQueueEvent()
@@ -1719,6 +2125,134 @@ proc runDaemon*() =
                 daemon.shuffleIndex.inc
               daemon.player.startCrossfade(float(daemon.crossfadeDuration))
               daemon.crossfadeStarted = true
+    # Gapless scheduling (only when crossfade is off)
+    if daemon.player.state == 1 and daemon.state.gapless and daemon.crossfadeDuration == 0:
+      var resolvedNext = nextQueuedPath
+      if isYtWatchUrl(resolvedNext) and resolvedNext in daemon.ytDownloaded:
+        resolvedNext = daemon.ytDownloaded[resolvedNext]
+      elif isYtWatchUrl(resolvedNext) and resolvedNext in daemon.ytStreamUrls:
+        resolvedNext = daemon.ytStreamUrls[resolvedNext]
+      if resolvedNext.len == 0:
+        daemon.gaplessPrepared = false
+        daemon.gaplessNextPath = ""
+      elif daemon.gaplessPrepared and daemon.gaplessNextPath != resolvedNext:
+        daemon.gaplessPrepared = false
+        daemon.gaplessNextPath = ""
+      if not daemon.gaplessPrepared and resolvedNext.len > 0:
+        let dur = daemon.player.duration
+        let tpos = daemon.player.timePos
+        if dur > 0.0 and tpos >= 0.0:
+          let timeRemaining = dur - tpos
+          if timeRemaining <= 6.0 and timeRemaining > 0.0:
+            daemon.player.prepareNext(resolvedNext)
+            daemon.gaplessPrepared = true
+            daemon.gaplessNextPath = resolvedNext
+    # Background cover art sync: process up to 3 tracks per iteration
+    if daemon.coverSyncActive and daemon.coverSyncIdx < daemon.coverSyncTracks.len:
+      let batchEnd = min(daemon.coverSyncIdx + 3, daemon.coverSyncTracks.len)
+      while daemon.coverSyncIdx < batchEnd:
+        let t = daemon.coverSyncTracks[daemon.coverSyncIdx]
+        if daemon.lib != nil:
+          let data = fetchCoverForTrack(t)
+          if data.len > 0:
+            daemon.lib.setCoverArt(t.id, data)
+            daemon.coverSyncFound.inc
+        daemon.coverSyncIdx.inc
+      let ev = %*{"event": "custom", "name": "sync_covers_progress",
+        "processed": %daemon.coverSyncIdx, "total": %daemon.coverSyncTotal,
+        "found": %daemon.coverSyncFound}
+      daemon.broadcastEvent(ev)
+    if daemon.coverSyncActive and daemon.coverSyncIdx >= daemon.coverSyncTracks.len:
+      daemon.coverSyncActive = false
+      daemon.broadcastEvent(%*{"event": "custom", "name": "sync_covers_done",
+        "total": %daemon.coverSyncTotal, "found": %daemon.coverSyncFound})
+    # Background lyrics sync: process up to 3 tracks per iteration
+    if daemon.lyricsSyncActive and daemon.lyricsSyncIdx < daemon.lyricsSyncTracks.len:
+      let batchEnd = min(daemon.lyricsSyncIdx + 3, daemon.lyricsSyncTracks.len)
+      while daemon.lyricsSyncIdx < batchEnd:
+        let t = daemon.lyricsSyncTracks[daemon.lyricsSyncIdx]
+        if daemon.lib != nil:
+          let (content, synced) = fetchLyricsForTrack(t)
+          if content.len > 0:
+            daemon.lib.setLyrics(t.id, content, synced)
+            daemon.lyricsSyncFound.inc
+        daemon.lyricsSyncIdx.inc
+      let ev = %*{"event": "custom", "name": "sync_lyrics_progress",
+        "processed": %daemon.lyricsSyncIdx, "total": %daemon.lyricsSyncTotal,
+        "found": %daemon.lyricsSyncFound}
+      daemon.broadcastEvent(ev)
+    if daemon.lyricsSyncActive and daemon.lyricsSyncIdx >= daemon.lyricsSyncTracks.len:
+      daemon.lyricsSyncActive = false
+      daemon.broadcastEvent(%*{"event": "custom", "name": "sync_lyrics_done",
+        "total": %daemon.lyricsSyncTotal, "found": %daemon.lyricsSyncFound})
+    # Background loudness scan: process up to 3 tracks per iteration
+    if daemon.loudnessScanActive and daemon.loudnessScanIdx < daemon.loudnessScanTrackIds.len:
+      let batchEnd = min(daemon.loudnessScanIdx + 3, daemon.loudnessScanTrackIds.len)
+      while daemon.loudnessScanIdx < batchEnd:
+        let trackId = daemon.loudnessScanTrackIds[daemon.loudnessScanIdx]
+        if daemon.lib != nil:
+          let t = daemon.lib.getTrackById(trackId)
+          if t.id > 0 and fileExists(t.path):
+            let meas = analyzeLoudness(t.path)
+            if meas.iLufs != 0.0:
+              let targetLufs = -daemon.state.preGainDb
+              let trackGain = targetLufs - meas.iLufs
+              daemon.lib.setLoudness(trackId, trackGain, trackGain, meas.truePeak)
+        daemon.loudnessScanIdx.inc
+      let ev = %*{"event": "custom", "name": "scan_loudness_progress",
+        "processed": %daemon.loudnessScanIdx, "total": %daemon.loudnessScanTotal}
+      daemon.broadcastEvent(ev)
+    if daemon.loudnessScanActive and daemon.loudnessScanIdx >= daemon.loudnessScanTrackIds.len:
+      daemon.loudnessScanActive = false
+      daemon.broadcastEvent(%*{"event": "custom", "name": "scan_loudness_done",
+        "total": %daemon.loudnessScanTotal})
+    # Dynamic mode: auto-queue suggested tracks when the queue runs low
+    if daemon.state.dynamicMode.enabled and daemon.player.state == 1:
+      if daemon.playbackQueue.len <= daemon.state.dynamicMode.minQueueRemaining and not daemon.dynamicAutoQueuing:
+        daemon.dynamicAutoQueuing = true
+        if daemon.lib != nil:
+          var playedSet = initTable[int64, bool]()
+          for t in daemon.lib.loadTracks():
+            if t.playCount > 0:
+              playedSet[t.id] = true
+          for p in daemon.playbackQueue:
+            let pId = daemon.lib.findTrackByPath(p)
+            if pId > 0: playedSet[pId] = true
+          for t in daemon.lib.getRecent(50):
+            playedSet[t.id] = true
+          var candidates: seq[Track] = @[]
+          for t in daemon.lib.loadTracks():
+            if t.id notin playedSet:
+              candidates.add(t)
+          if candidates.len == 0:
+            candidates = daemon.lib.getRecent(daemon.state.dynamicMode.maxHistory)
+          if candidates.len > 0:
+            let pick = candidates[rand(candidates.len)]
+            daemon.playbackQueue.add(pick.path)
+            daemon.sendQueueEvent()
+        daemon.dynamicAutoQueuing = false
+    # Scrobble tracking: submit when a track passes the play thresholds
+    if daemon.state.scrobble.enabled and daemon.player.state == 1:
+      daemon.lastScrobbleCheckFrames.inc
+      if daemon.lastScrobbleCheckFrames >= 30:
+        daemon.lastScrobbleCheckFrames = 0
+        if daemon.currentTrackPath.len > 0:
+          let trackId = if daemon.lib != nil: daemon.lib.findTrackByPath(daemon.currentTrackPath) else: 0
+          if trackId > 0 and trackId notin daemon.scrobbledThisSession:
+            let t = daemon.lib.getTrackById(trackId)
+            let dur = daemon.player.duration
+            let tpos = daemon.player.timePos
+            let minSecs = max(30, daemon.state.scrobble.minPlaySecs)
+            if dur > 0.0 and tpos >= 0.0:
+              let pctPlayed = tpos / dur
+              if tpos >= float(minSecs) or pctPlayed >= daemon.state.scrobble.minPlayPct:
+                let (ok, err) = submitScrobble(daemon.state.scrobble.apiKey,
+                  daemon.state.scrobble.sessionToken, t.artist, t.title, t.album, int(dur))
+                if ok:
+                  daemon.scrobbledThisSession.add(trackId)
+                  daemon.broadcastEvent(%*{"event": "custom", "name": "scrobble_submitted", "track_id": %trackId})
+                else:
+                  daemon.broadcastEvent(%*{"event": "custom", "name": "scrobble_error", "track_id": %trackId, "error": %err})
     # Background scan: process up to 10 files per iteration
     if daemon.scanningDir.len > 0 and daemon.scanningFiles.len > 0:
       let batchEnd = min(daemon.scanningIdx + 10, daemon.scanningFiles.len)

@@ -592,6 +592,7 @@ typedef struct {
   float             volume;
   volatile int      master_ended;
   volatile int      slave_loaded;
+  volatile int      gapless_promoted; /* one-shot: slave promoted to master at EOF */
   int               crossfade_reverse;
   int               crossfade_curve; /* 0=equal-power, 1=quadratic, 2=cubic, 3=asymmetric */
   volatile int      priming;        /* accumulate frames before first write */
@@ -675,6 +676,20 @@ static void* mixer_thread(void* arg) {
     int mtotal = decode_into_buf(mx->master, mpkt, mframe, &mbuf, &mcap);
     if (mtotal < 0) {
       // Master EOF
+      if (mx->slave_loaded && mx->slave && !mx->crossfade_active) {
+        // Gapless: promote slave to master immediately (no gap)
+        FfmpegAudioCtx* old = mx->master;
+        mx->master = mx->slave;
+        mx->slave = NULL;
+        mx->slave_loaded = 0;
+        mx->master_ended = 0;
+        mx->gapless_promoted = 1;
+        ffmpeg_audio_uninit(old);
+        // Reopen ALSA for new master's sample rate/channels
+        mixer_alsa_close(mx);
+        mixer_alsa_open(mx);
+        continue;
+      }
       mx->master_ended = 1;
       if (!mx->crossfade_active) mx->playing = 0;
       break;
@@ -1017,6 +1032,16 @@ int ffmpeg_mixer_is_crossfading(MixerCtx* mx) {
 int ffmpeg_mixer_master_ended(MixerCtx* mx) {
   if (!mx) return 0;
   return mx->master_ended ? 1 : 0;
+}
+
+int ffmpeg_mixer_gapless_promoted(MixerCtx* mx) {
+  if (!mx) return 0;
+  return mx->gapless_promoted ? 1 : 0;
+}
+
+void ffmpeg_mixer_clear_gapless_promoted(MixerCtx* mx) {
+  if (!mx) return;
+  mx->gapless_promoted = 0;
 }
 
 void ffmpeg_mixer_set_volume(MixerCtx* mx, float volume) {

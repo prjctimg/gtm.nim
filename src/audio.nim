@@ -10,7 +10,9 @@ type
     aekCustomEvent, aekQueueChanged, aekHeartbeat,
     aekShuffleChanged, aekRepeatModeChanged, aekQueueIndexChanged,
     aekCrossfadeChanged, aekEqPresetChanged, aekEqEnabledChanged,
-    aekSleepTimerTick, aekSleepTimerExpired
+    aekSleepTimerTick, aekSleepTimerExpired,
+    aekReverbChanged, aekLoudnessModeChanged, aekPreGainChanged,
+    aekGaplessChanged, aekDynamicModeChanged, aekScrobbleConfigChanged
 
   AudioEvent* = object
     kind*: AudioEventKind
@@ -68,6 +70,12 @@ proc eventName*(k: AudioEventKind): string =
   of aekEqEnabledChanged: "eq_enabled_changed"
   of aekSleepTimerTick: "sleep_timer_tick"
   of aekSleepTimerExpired: "sleep_timer_expired"
+  of aekReverbChanged: "reverb_changed"
+  of aekLoudnessModeChanged: "loudness_mode_changed"
+  of aekPreGainChanged: "pre_gain_changed"
+  of aekGaplessChanged: "gapless_changed"
+  of aekDynamicModeChanged: "dynamic_mode_changed"
+  of aekScrobbleConfigChanged: "scrobble_config_changed"
 
 proc parseEventName*(s: string): AudioEventKind =
   case s
@@ -91,6 +99,12 @@ proc parseEventName*(s: string): AudioEventKind =
   of "eq_enabled_changed": aekEqEnabledChanged
   of "sleep_timer_tick": aekSleepTimerTick
   of "sleep_timer_expired": aekSleepTimerExpired
+  of "reverb_changed": aekReverbChanged
+  of "loudness_mode_changed": aekLoudnessModeChanged
+  of "pre_gain_changed": aekPreGainChanged
+  of "gapless_changed": aekGaplessChanged
+  of "dynamic_mode_changed": aekDynamicModeChanged
+  of "scrobble_config_changed": aekScrobbleConfigChanged
   else: aekNone
 method pollEvents*(b: AudioBackend): seq[AudioEvent] {.base.} = @[]
 method shutdown*(b: AudioBackend) {.base.} = discard
@@ -145,6 +159,8 @@ when defined(useFFmpeg):
   proc ffmpeg_mixer_is_playing(ctx: FfmpegCtx): cint {.importc.}
   proc ffmpeg_mixer_is_crossfading(ctx: FfmpegCtx): cint {.importc.}
   proc ffmpeg_mixer_master_ended(ctx: FfmpegCtx): cint {.importc.}
+  proc ffmpeg_mixer_gapless_promoted(ctx: FfmpegCtx): cint {.importc.}
+  proc ffmpeg_mixer_clear_gapless_promoted(ctx: FfmpegCtx) {.importc.}
   proc ffmpeg_mixer_read_pcm(ctx: FfmpegCtx, output: ptr float32, count: cint): cint {.importc.}
   proc ffmpeg_mixer_get_metadata(ctx: FfmpegCtx, title, artist, album: ptr cstring, duration: ptr cdouble) {.importc.}
   proc ffmpeg_mixer_start_crossfade(ctx: FfmpegCtx, duration_frames: cint, reverse: cint = 0) {.importc.}
@@ -389,6 +405,9 @@ when defined(useFFmpeg):
     elif not nowCrossfading and b.lastCrossfading:
       result.add(AudioEvent(kind: aekMetadataChanged, strVal: "crossfade_ended"))
     if ffmpeg_mixer_master_ended(b.ctx) != 0 and b.lastPlaying:
+      result.add(AudioEvent(kind: aekTrackEnded))
+    if ffmpeg_mixer_gapless_promoted(b.ctx) != 0:
+      ffmpeg_mixer_clear_gapless_promoted(b.ctx)
       result.add(AudioEvent(kind: aekTrackEnded))
     b.lastPlaying = nowPlaying
     b.lastCrossfading = nowCrossfading

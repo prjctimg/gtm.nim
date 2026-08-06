@@ -656,6 +656,58 @@ proc getEqPresets*(cli: DaemonClient): JsonNode =
   cli.ensureDaemon()
   sendDaemonCmd(cli, %*{"cmd": "list_eq_presets"})
 
+proc setReverb*(cli: DaemonClient, enabled: bool, roomScale: float): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "set_reverb", "enabled": enabled, "room_scale": roomScale})
+
+proc setLoudnessMode*(cli: DaemonClient, mode: string): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "set_loudness_mode", "mode": mode})
+
+proc scanLoudness*(cli: DaemonClient, force: bool = false): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "scan_loudness", "force": force})
+
+proc setPreGain*(cli: DaemonClient, preGainDb: float): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "set_pre_gain", "pre_gain_db": preGainDb})
+
+proc setGapless*(cli: DaemonClient, enabled: bool): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "set_gapless", "enabled": enabled})
+
+proc setDynamicMode*(cli: DaemonClient, enabled: bool): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "set_dynamic_mode", "enabled": enabled})
+
+proc setScrobble*(cli: DaemonClient, enabled: bool): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "set_scrobble", "enabled": enabled})
+
+proc organizeLibrary*(cli: DaemonClient, dryRun: bool = true): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "organize_library", "dry_run": dryRun})
+
+proc getCoverArt*(cli: DaemonClient, trackId: int64): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "get_cover_art", "track_id": trackId})
+
+proc getLyrics*(cli: DaemonClient, trackId: int64): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "get_lyrics", "track_id": trackId})
+
+proc syncCovers*(cli: DaemonClient) =
+  cli.ensureDaemon()
+  sendOnly(cli, %*{"cmd": "sync_covers"})
+
+proc syncLyrics*(cli: DaemonClient) =
+  cli.ensureDaemon()
+  sendOnly(cli, %*{"cmd": "sync_lyrics"})
+
+proc libraryAction*(cli: DaemonClient, action: string): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "library", "action": action})
+
 proc newDaemonClient*(): DaemonClient =
   DaemonClient(
     volume: 80, state: 0, running: false,

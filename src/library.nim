@@ -30,12 +30,16 @@ when defined(useSqlite):
   const
     SQLITE_OK = 0
     SQLITE_ROW = 100
+    SQLITE_DONE = 101
     SQLITE_NULL = 5
     SQLITE_TRANSIENT = cast[pointer](-1)
 
   type
     LibraryDb* = ref object
       db: sqlite3
+
+  proc parseM3u*(path: string): seq[string]
+  proc parseFilenameMetadata*(path: string): tuple[title, artist, album: string]
 
   proc sqlerror(db: sqlite3, msg: string) =
     stderr.writeLine("[sqlite3] " & msg & ": " & $sqlite3_errmsg(db))
@@ -166,6 +170,30 @@ when defined(useSqlite):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         query TEXT NOT NULL,
         searched_at TEXT DEFAULT (datetime('now'))
+      )
+    """)
+    discard execRaw(lib.db, """
+      CREATE TABLE IF NOT EXISTS covers (
+        track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+        data BLOB NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    """)
+    discard execRaw(lib.db, """
+      CREATE TABLE IF NOT EXISTS lyrics (
+        track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+        content TEXT NOT NULL,
+        synced INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    """)
+    discard execRaw(lib.db, """
+      CREATE TABLE IF NOT EXISTS loudness (
+        track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+        track_gain REAL DEFAULT 0.0,
+        album_gain REAL DEFAULT 0.0,
+        true_peak REAL DEFAULT 0.0,
+        scanned_at TEXT DEFAULT (datetime('now'))
       )
     """)
 
@@ -364,7 +392,7 @@ when defined(useSqlite):
     let stmt = prepare(lib.db, "INSERT INTO playlists (name) VALUES (?)")
     if stmt == nil: return 0
     bindText(stmt, 1.cint, name)
-    if sqlite3_step(stmt) != SQLITE_OK:
+    if sqlite3_step(stmt) != SQLITE_DONE:
       finalize(stmt)
       return 0
     finalize(stmt)
@@ -490,6 +518,249 @@ when defined(useSqlite):
   proc clearSearchHistory*(lib: LibraryDb) =
     discard execRaw(lib.db, "DELETE FROM search_history")
 
+  proc getTrackById*(lib: LibraryDb, trackId: int64): Track =
+    let stmt = prepare(lib.db, """
+      SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played
+      FROM tracks t
+      LEFT JOIN artists a ON t.artist_id = a.id
+      LEFT JOIN albums al ON t.album_id = al.id
+      WHERE t.id = ?
+    """)
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    if sqlite3_step(stmt) == SQLITE_ROW:
+      result = Track(
+        id: colInt64(stmt, 0.cint), path: colText(stmt, 1.cint), title: colText(stmt, 2.cint),
+        artist: colText(stmt, 3.cint), album: colText(stmt, 4.cint), duration: colFloat(stmt, 5.cint),
+        trackNum: colInt(stmt, 6.cint), year: colInt(stmt, 7.cint),
+        genre: colText(stmt, 8.cint), playCount: colInt(stmt, 9.cint),
+        artistId: colInt64(stmt, 10.cint), albumId: colInt64(stmt, 11.cint),
+        addedAt: colText(stmt, 12.cint), lastPlayed: colText(stmt, 13.cint)
+      )
+    finalize(stmt)
+
+  proc getRecent*(lib: LibraryDb, count: int): seq[Track] =
+    let stmt = prepare(lib.db, """
+      SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played
+      FROM tracks t
+      LEFT JOIN artists a ON t.artist_id = a.id
+      LEFT JOIN albums al ON t.album_id = al.id
+      WHERE t.last_played IS NOT NULL AND t.last_played != ''
+      ORDER BY t.last_played DESC
+      LIMIT ?
+    """)
+    if stmt == nil: return
+    bindInt(stmt, 1.cint, max(1, count))
+    while sqlite3_step(stmt) == SQLITE_ROW:
+      result.add(Track(
+        id: colInt64(stmt, 0.cint), path: colText(stmt, 1.cint), title: colText(stmt, 2.cint),
+        artist: colText(stmt, 3.cint), album: colText(stmt, 4.cint), duration: colFloat(stmt, 5.cint),
+        trackNum: colInt(stmt, 6.cint), year: colInt(stmt, 7.cint),
+        genre: colText(stmt, 8.cint), playCount: colInt(stmt, 9.cint),
+        artistId: colInt64(stmt, 10.cint), albumId: colInt64(stmt, 11.cint),
+        addedAt: colText(stmt, 12.cint), lastPlayed: colText(stmt, 13.cint)
+      ))
+    finalize(stmt)
+
+  proc removeTrack*(lib: LibraryDb, trackId: int64) =
+    discard execRaw(lib.db, "DELETE FROM favourites WHERE track_id = " & $trackId)
+    discard execRaw(lib.db, "DELETE FROM playlist_tracks WHERE track_id = " & $trackId)
+    discard execRaw(lib.db, "DELETE FROM covers WHERE track_id = " & $trackId)
+    discard execRaw(lib.db, "DELETE FROM lyrics WHERE track_id = " & $trackId)
+    discard execRaw(lib.db, "DELETE FROM loudness WHERE track_id = " & $trackId)
+    let stmt = prepare(lib.db, "DELETE FROM tracks WHERE id = ?")
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    discard sqlite3_step(stmt)
+    finalize(stmt)
+
+  proc updateTrackMetadata*(lib: LibraryDb, trackId: int64, title, artist, album, genre: string,
+                            year, trackNum: int) =
+    let t = lib.getTrackById(trackId)
+    if t.id == 0: return
+    let newTitle = if title.len > 0: title else: t.title
+    let artistId = if artist.len > 0: getArtistId(lib, artist) else: t.artistId
+    let albumId = if album.len > 0: getAlbumId(lib, album, artistId, t.year, t.genre) else: t.albumId
+    let newGenre = if genre.len > 0: genre else: t.genre
+    let newYear = if year != 0: year else: t.year
+    let newTrackNum = if trackNum != 0: trackNum else: t.trackNum
+    let stmt = prepare(lib.db, "UPDATE tracks SET title=?, artist_id=?, album_id=?, genre=?, year=?, track_num=? WHERE id=?")
+    if stmt == nil: return
+    bindText(stmt, 1.cint, newTitle)
+    bindInt64(stmt, 2.cint, artistId)
+    bindInt64(stmt, 3.cint, albumId)
+    bindText(stmt, 4.cint, newGenre)
+    bindInt(stmt, 5.cint, newYear)
+    bindInt(stmt, 6.cint, newTrackNum)
+    bindInt64(stmt, 7.cint, trackId)
+    discard sqlite3_step(stmt)
+    finalize(stmt)
+
+  proc importM3u*(lib: LibraryDb, path: string): int64 =
+    let name = splitFile(path).name
+    let playlistId = lib.createPlaylist(name)
+    if playlistId == 0: return 0
+    var pos = 0
+    for trackPath in parseM3u(path):
+      var trackId = lib.findTrackByPath(trackPath)
+      if trackId == 0:
+        let meta = parseFilenameMetadata(trackPath)
+        trackId = lib.addTrack(trackPath, meta.title, meta.artist, "", 0.0, 0, 0, "")
+      if trackId > 0:
+        lib.addTrackToPlaylist(playlistId, trackId, pos)
+        inc pos
+    result = playlistId
+
+  proc exportM3u*(lib: LibraryDb, playlistId: int64, path: string): bool =
+    var plFound = false
+    for pl in lib.loadPlaylists():
+      if pl.id == playlistId:
+        plFound = true
+        break
+    if not plFound: return false
+    var outFile: File
+    if not outFile.open(path, fmWrite): return false
+    try:
+      outFile.writeLine("#EXTM3U")
+      for pl in lib.loadPlaylists():
+        if pl.id == playlistId:
+          for trackId in pl.trackIds:
+            let t = lib.getTrackById(trackId)
+            if t.id != 0:
+              outFile.writeLine("#EXTINF:" & $int(t.duration) & "," & t.title)
+              outFile.writeLine(t.path)
+          break
+    finally:
+      outFile.close()
+    result = true
+
+  proc getCoverArt*(lib: LibraryDb, trackId: int64): string =
+    let stmt = prepare(lib.db, "SELECT data FROM covers WHERE track_id = ?")
+    if stmt == nil: return ""
+    bindInt64(stmt, 1.cint, trackId)
+    if sqlite3_step(stmt) == SQLITE_ROW:
+      result = colText(stmt, 0.cint)
+    finalize(stmt)
+
+  proc hasCoverArt*(lib: LibraryDb, trackId: int64): bool =
+    let stmt = prepare(lib.db, "SELECT count(*) FROM covers WHERE track_id = ?")
+    if stmt == nil: return false
+    bindInt64(stmt, 1.cint, trackId)
+    if sqlite3_step(stmt) == SQLITE_ROW:
+      result = colInt64(stmt, 0.cint) > 0
+    finalize(stmt)
+
+  proc setCoverArt*(lib: LibraryDb, trackId: int64, data: string) =
+    let stmt = prepare(lib.db, "INSERT OR REPLACE INTO covers (track_id, data, updated_at) VALUES (?, ?, datetime('now'))")
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    bindText(stmt, 2.cint, data)
+    discard sqlite3_step(stmt)
+    finalize(stmt)
+
+  proc getLyrics*(lib: LibraryDb, trackId: int64): tuple[content: string, synced: bool] =
+    let stmt = prepare(lib.db, "SELECT content, synced FROM lyrics WHERE track_id = ?")
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    if sqlite3_step(stmt) == SQLITE_ROW:
+      result = (content: colText(stmt, 0.cint), synced: colInt(stmt, 1.cint) != 0)
+    finalize(stmt)
+
+  proc hasLyrics*(lib: LibraryDb, trackId: int64): bool =
+    let stmt = prepare(lib.db, "SELECT count(*) FROM lyrics WHERE track_id = ?")
+    if stmt == nil: return false
+    bindInt64(stmt, 1.cint, trackId)
+    if sqlite3_step(stmt) == SQLITE_ROW:
+      result = colInt64(stmt, 0.cint) > 0
+    finalize(stmt)
+
+  proc setLyrics*(lib: LibraryDb, trackId: int64, content: string, synced: bool) =
+    let stmt = prepare(lib.db, "INSERT OR REPLACE INTO lyrics (track_id, content, synced, updated_at) VALUES (?, ?, ?, datetime('now'))")
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    bindText(stmt, 2.cint, content)
+    bindInt(stmt, 3.cint, if synced: 1 else: 0)
+    discard sqlite3_step(stmt)
+    finalize(stmt)
+
+  proc getLoudness*(lib: LibraryDb, trackId: int64): tuple[trackGain, albumGain, truePeak: float] =
+    let stmt = prepare(lib.db, "SELECT track_gain, album_gain, true_peak FROM loudness WHERE track_id = ?")
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    if sqlite3_step(stmt) == SQLITE_ROW:
+      result = (trackGain: colFloat(stmt, 0.cint), albumGain: colFloat(stmt, 1.cint), truePeak: colFloat(stmt, 2.cint))
+    finalize(stmt)
+
+  proc setLoudness*(lib: LibraryDb, trackId: int64, trackGain, albumGain, truePeak: float) =
+    let stmt = prepare(lib.db, "INSERT OR REPLACE INTO loudness (track_id, track_gain, album_gain, true_peak, scanned_at) VALUES (?, ?, ?, ?, datetime('now'))")
+    if stmt == nil: return
+    bindInt64(stmt, 1.cint, trackId)
+    bindDouble(stmt, 2.cint, trackGain)
+    bindDouble(stmt, 3.cint, albumGain)
+    bindDouble(stmt, 4.cint, truePeak)
+    discard sqlite3_step(stmt)
+    finalize(stmt)
+
+  proc getTracksNeedingLoudness*(lib: LibraryDb, force: bool): seq[Track] =
+    let sql = if force:
+        "SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played FROM tracks t LEFT JOIN artists a ON t.artist_id = a.id LEFT JOIN albums al ON t.album_id = al.id"
+      else:
+        "SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played FROM tracks t LEFT JOIN artists a ON t.artist_id = a.id LEFT JOIN albums al ON t.album_id = al.id LEFT JOIN loudness l ON l.track_id = t.id WHERE l.track_id IS NULL"
+    let stmt = prepare(lib.db, sql)
+    if stmt == nil: return
+    while sqlite3_step(stmt) == SQLITE_ROW:
+      result.add(Track(
+        id: colInt64(stmt, 0.cint), path: colText(stmt, 1.cint), title: colText(stmt, 2.cint),
+        artist: colText(stmt, 3.cint), album: colText(stmt, 4.cint), duration: colFloat(stmt, 5.cint),
+        trackNum: colInt(stmt, 6.cint), year: colInt(stmt, 7.cint),
+        genre: colText(stmt, 8.cint), playCount: colInt(stmt, 9.cint),
+        artistId: colInt64(stmt, 10.cint), albumId: colInt64(stmt, 11.cint),
+        addedAt: colText(stmt, 12.cint), lastPlayed: colText(stmt, 13.cint)
+      ))
+    finalize(stmt)
+
+  proc getTracksMissingCover*(lib: LibraryDb): seq[Track] =
+    let stmt = prepare(lib.db, """
+      SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played
+      FROM tracks t
+      LEFT JOIN artists a ON t.artist_id = a.id
+      LEFT JOIN albums al ON t.album_id = al.id
+      LEFT JOIN covers c ON c.track_id = t.id
+      WHERE c.track_id IS NULL
+    """)
+    if stmt == nil: return
+    while sqlite3_step(stmt) == SQLITE_ROW:
+      result.add(Track(
+        id: colInt64(stmt, 0.cint), path: colText(stmt, 1.cint), title: colText(stmt, 2.cint),
+        artist: colText(stmt, 3.cint), album: colText(stmt, 4.cint), duration: colFloat(stmt, 5.cint),
+        trackNum: colInt(stmt, 6.cint), year: colInt(stmt, 7.cint),
+        genre: colText(stmt, 8.cint), playCount: colInt(stmt, 9.cint),
+        artistId: colInt64(stmt, 10.cint), albumId: colInt64(stmt, 11.cint),
+        addedAt: colText(stmt, 12.cint), lastPlayed: colText(stmt, 13.cint)
+      ))
+    finalize(stmt)
+
+  proc getTracksMissingLyrics*(lib: LibraryDb): seq[Track] =
+    let stmt = prepare(lib.db, """
+      SELECT t.id, t.path, t.title, a.name, al.title, t.duration, t.track_num, t.year, t.genre, t.play_count, t.artist_id, t.album_id, t.added_at, t.last_played
+      FROM tracks t
+      LEFT JOIN artists a ON t.artist_id = a.id
+      LEFT JOIN albums al ON t.album_id = al.id
+      LEFT JOIN lyrics l ON l.track_id = t.id
+      WHERE l.track_id IS NULL
+    """)
+    if stmt == nil: return
+    while sqlite3_step(stmt) == SQLITE_ROW:
+      result.add(Track(
+        id: colInt64(stmt, 0.cint), path: colText(stmt, 1.cint), title: colText(stmt, 2.cint),
+        artist: colText(stmt, 3.cint), album: colText(stmt, 4.cint), duration: colFloat(stmt, 5.cint),
+        trackNum: colInt(stmt, 6.cint), year: colInt(stmt, 7.cint),
+        genre: colText(stmt, 8.cint), playCount: colInt(stmt, 9.cint),
+        artistId: colInt64(stmt, 10.cint), albumId: colInt64(stmt, 11.cint),
+        addedAt: colText(stmt, 12.cint), lastPlayed: colText(stmt, 13.cint)
+      ))
+    finalize(stmt)
+
   proc closeDb*(lib: LibraryDb) =
     if lib != nil and lib.db != nil:
       discard sqlite3_close(lib.db)
@@ -530,6 +801,23 @@ else:
   proc addSearchQuery*(lib: LibraryDb, query: string) = discard
   proc getSearchHistory*(lib: LibraryDb): seq[string] = @[]
   proc clearSearchHistory*(lib: LibraryDb) = discard
+  proc getTrackById*(lib: LibraryDb, trackId: int64): Track = default(Track)
+  proc getRecent*(lib: LibraryDb, count: int): seq[Track] = @[]
+  proc removeTrack*(lib: LibraryDb, trackId: int64) = discard
+  proc updateTrackMetadata*(lib: LibraryDb, trackId: int64, title, artist, album, genre: string, year, trackNum: int) = discard
+  proc importM3u*(lib: LibraryDb, path: string): int64 = 0
+  proc exportM3u*(lib: LibraryDb, playlistId: int64, path: string): bool = false
+  proc getCoverArt*(lib: LibraryDb, trackId: int64): string = ""
+  proc hasCoverArt*(lib: LibraryDb, trackId: int64): bool = false
+  proc setCoverArt*(lib: LibraryDb, trackId: int64, data: string) = discard
+  proc getLyrics*(lib: LibraryDb, trackId: int64): tuple[content: string, synced: bool] = (content: "", synced: false)
+  proc hasLyrics*(lib: LibraryDb, trackId: int64): bool = false
+  proc setLyrics*(lib: LibraryDb, trackId: int64, content: string, synced: bool) = discard
+  proc getLoudness*(lib: LibraryDb, trackId: int64): tuple[trackGain, albumGain, truePeak: float] = (trackGain: 0.0, albumGain: 0.0, truePeak: 0.0)
+  proc setLoudness*(lib: LibraryDb, trackId: int64, trackGain, albumGain, truePeak: float) = discard
+  proc getTracksNeedingLoudness*(lib: LibraryDb, force: bool): seq[Track] = @[]
+  proc getTracksMissingCover*(lib: LibraryDb): seq[Track] = @[]
+  proc getTracksMissingLyrics*(lib: LibraryDb): seq[Track] = @[]
 
 proc displayName*(track: Track): string =
   if track.title.len > 0: track.title

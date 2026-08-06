@@ -372,6 +372,99 @@ Request: `{"cmd": "set_eq_preset", "name": "Rock"}`
 
 Response: `{"ok": true}`
 
+### Audio Processing
+
+#### `set_reverb`
+
+Enable or disable reverb on the mixer.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether reverb is on |
+| `room_scale` | float | `0.7` | Room scale parameter (0.0–1.0) |
+
+Request: `{"cmd": "set_reverb", "enabled": true, "room_scale": 0.8}`
+
+Response: `{"ok": true}`
+
+#### `set_loudness_mode`
+
+Set the loudness normalization mode.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `mode` | string | `"off"` | `off`, `track`, `album`, or `auto` |
+
+Request: `{"cmd": "set_loudness_mode", "mode": "track"}`
+
+Response: `{"ok": true}`
+
+#### `set_pre_gain`
+
+Set the target loudness (pre-gain) in LUFS for loudness normalization.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `pre_gain_db` | float | `-14.0` | Target integrated loudness in LUFS (negative) |
+
+Request: `{"cmd": "set_pre_gain", "pre_gain_db": -16.0}`
+
+Response: `{"ok": true}`
+
+#### `scan_loudness`
+
+Start a background loudness scan over the library using ffmpeg's EBU R128
+filter. Emits `scan_loudness_progress` / `scan_loudness_done` events.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `force` | bool | `false` | Re-scan tracks that already have loudness data |
+
+Request: `{"cmd": "scan_loudness", "force": true}`
+
+Response:
+```json
+{"ok": true, "started": true, "pending_tracks": 120}
+```
+
+#### `set_gapless`
+
+Enable or disable gapless playback (zero-gap track transition at end of the
+current track).
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether gapless playback is on |
+
+Request: `{"cmd": "set_gapless", "enabled": true}`
+
+Response: `{"ok": true}`
+
+#### `set_dynamic_mode`
+
+Enable or disable dynamic volume mode (auto volume adjustment while playing).
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether dynamic mode is on |
+
+Request: `{"cmd": "set_dynamic_mode", "enabled": true}`
+
+Response: `{"ok": true}`
+
+#### `set_scrobble`
+
+Enable or disable Last.fm scrobbling. Scrobbles are submitted once a track has
+played for at least 50% of its duration (or 4 minutes).
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether scrobbling is on |
+
+Request: `{"cmd": "set_scrobble", "enabled": true}`
+
+Response: `{"ok": true}`
+
 ### Library / Playlists
 
 The daemon maintains a SQLite library database at
@@ -494,6 +587,78 @@ Request: `{"cmd": "get_playlist_tracks", "playlist_id": 5}`
 Response:
 ```json
 {"ok": true, "playlist_id": 5, "track_ids": [1, 2, 3, ...]}
+```
+
+#### `organize_library`
+
+Move tracks into a canonical `Artist/Album/Track` folder layout under the
+library directory.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `dry_run` | bool | `true` | Report planned moves without applying them |
+
+Request: `{"cmd": "organize_library", "dry_run": true}`
+
+Response:
+```json
+{"ok": true, "planned_moves": [{"from": "/old/path.mp3", "to": "/Artist/Album/Track.mp3"}]}
+```
+
+#### `get_cover_art`
+
+Fetch (or return cached) cover art for a track. If not cached locally, the
+daemon searches Deezer and stores the result in the `covers` table.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `track_id` | int | `0` | Library track ID |
+
+Response:
+```json
+{"ok": true, "track_id": 5, "cover_base64": "<base64 PNG>", "cached": true}
+```
+
+`cover_base64` is `null` when no cover could be found.
+
+#### `get_lyrics`
+
+Fetch (or return cached) synchronized lyrics for a track from lrclib.net and
+store them in the `lyrics` table.
+
+| Arg | Type | Default | Description |
+|---|---|---|---|
+| `track_id` | int | `0` | Library track ID |
+
+Response:
+```json
+{"ok": true, "track_id": 5, "lyrics": "[00:12.00]Line one\n[00:15.50]Line two", "cached": true}
+```
+
+`lyrics` is `null` when no lyrics could be found.
+
+#### `sync_covers`
+
+Start a background scan that fetches missing cover art for all library tracks.
+Emits `sync_covers_progress` / `sync_covers_done` events.
+
+Request: `{"cmd": "sync_covers"}`
+
+Response:
+```json
+{"ok": true, "started": true, "pending_tracks": 34}
+```
+
+#### `sync_lyrics`
+
+Start a background scan that fetches missing lyrics for all library tracks.
+Emits `sync_lyrics_progress` / `sync_lyrics_done` events.
+
+Request: `{"cmd": "sync_lyrics"}`
+
+Response:
+```json
+{"ok": true, "started": true, "pending_tracks": 40}
 ```
 
 ### Lifecycle

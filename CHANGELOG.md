@@ -9,6 +9,25 @@ Licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE) fo
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-06
+
+### Added
+- Reverb control: `set_reverb` command, `ffmpeg_mixer_set_reverb` C bridge, per-mixer reverb state persisted
+- Loudness normalization: `set_loudness_mode` (off/track/album/auto), `set_pre_gain`, `scan_loudness` command with background ebur128 scan (ffmpeg), `loudness` table (track/album gain, true peak)
+- Gapless playback: `set_gapless` command, FFmpeg mixer gapless promotion via `ffmpeg_mixer_gapless_promoted`/`ffmpeg_mixer_clear_gapless_promoted`, daemon-side next-track preload and gapless bookkeeping
+- Dynamic mode: `set_dynamic_mode` command
+- Last.fm scrobbling: `set_scrobble` command, `submitScrobble` curl-based scrobble submission on track progress
+- Library organization: `organize_library` command with dry-run support
+- Cover art: `get_cover_art` command (Deezer search → base64 PNG), `covers` table, background cover sync (`sync_covers` + progress/done events)
+- Lyrics: `get_lyrics` command (lrclib.net → LRC), `lyrics` table, background lyrics sync (`sync_lyrics` + progress/done events)
+- Client wrappers in `client.nim` for all new commands
+- Config persistence for new audio settings in `state.nim`
+
+### Fixed
+- `createPlaylist` always returned 0: `sqlite3_step` returns `SQLITE_DONE` (101) for INSERTs, not `SQLITE_OK`
+- `exportM3u` now validates playlist existence and returns `false` if not found
+- `importM3u`/`parseFilenameMetadata` tuple destructuring and forward-declaration compile errors
+
 ## [0.4.9] — 2026-07-26
 
 ### Added
