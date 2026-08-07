@@ -1,5 +1,6 @@
-import unittest, json, strutils
+import unittest, json, strutils, os, sequtils
 import ../src/ytdlp, ../src/state
+import ../src/library, ../src/cli
 
 suite "parseYtJsonLine":
   test "parses a valid video result":
@@ -76,3 +77,63 @@ suite "jsRuntimeFlags":
     let r = jsRuntimeFlags("node")
     check "node" in r
     check "ejs:github" in r
+
+suite "queue CLI parse":
+  test "bare queue defaults to list":
+    let r = parseArgs(@["queue"])
+    check r.subcmd == scQueue
+    check r.queueAction == "list"
+
+  test "queue add collects all targets":
+    let r = parseArgs(@["queue", "add", "a.mp3", "~/Music/album/", "https://youtu.be/x"])
+    check r.subcmd == scQueue
+    check r.queueAction == "add"
+    check r.queueTargets == @["a.mp3", "~/Music/album/", "https://youtu.be/x"]
+
+  test "queue remove parses index":
+    let r = parseArgs(@["queue", "remove", "3"])
+    check r.queueAction == "remove"
+    check r.queueIndex == 3
+
+  test "queue move parses from/to":
+    let r = parseArgs(@["queue", "move", "1", "5"])
+    check r.queueAction == "move"
+    check r.queueFrom == 1
+    check r.queueTo == 5
+
+  test "queue clear takes no targets":
+    let r = parseArgs(@["queue", "clear"])
+    check r.queueAction == "clear"
+    check r.queueTargets.len == 0
+
+  test "queue set collects targets":
+    let r = parseArgs(@["queue", "set", "x.mp3", "y.mp3"])
+    check r.queueAction == "set"
+    check r.queueTargets == @["x.mp3", "y.mp3"]
+
+suite "loadFromArgs expansion":
+  test "existing file path passes through":
+    let tmp = getTempDir() / "gtm_single_" & $os.getCurrentProcessId() & ".mp3"
+    writeFile(tmp, "x")
+    defer: removeFile(tmp)
+    check loadFromArgs(@[tmp]) == @[tmp]
+
+  test "directory is expanded recursively":
+    let base = getTempDir() / "gtm_test_dir_" & $os.getCurrentProcessId()
+    removeDir(base)
+    createDir(base / "sub")
+    writeFile(base / "a.mp3", "x")
+    writeFile(base / "b.flac", "x")
+    writeFile(base / "sub" / "c.wav", "x")
+    writeFile(base / "notes.txt", "x")
+    defer: removeDir(base)
+    let expanded = loadFromArgs(@[base])
+    let names = expanded.mapIt(it.extractFilename())
+    check "a.mp3" in names
+    check "b.flac" in names
+    check "c.wav" in names
+    check "notes.txt" notin names
+
+  test "URL passes through unexpanded":
+    let url = "https://youtu.be/abc123"
+    check loadFromArgs(@[url]) == @[url]

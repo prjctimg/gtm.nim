@@ -1,4 +1,4 @@
-import strutils
+import strutils, os
 
 const
   GTM_SRC = "src/gtm.nim"
@@ -50,6 +50,15 @@ proc buildBinary(src, label: string, version:string ) =
     " -d:gtmBuildTime:" 
   sh("nim c " & flags & " " & src & " 2>&1")
 
+proc buildCompletions() =
+  if not dirExists("bin"):
+    mkDir("bin")
+  for f in ["gtm.bash", "_gtm", "gtm.fish"]:
+    let src = "completions" / f
+    if fileExists(src):
+      sh("cp " & src & " bin/" & f)
+      echo "  [OK]   completion -> bin/" & f
+
 
 when isMainModule:
   echo ""
@@ -75,6 +84,11 @@ when isMainModule:
   echo "── Build ──"
   buildBinary(GTMD_SRC, "gtmd", version)
   buildBinary(GTM_SRC, "gtm", version)
+  echo ""
+
+  # Stage 4b: completions
+  echo "── Completions ──"
+  buildCompletions()
   echo ""
 
   # Stage 5: summary

@@ -101,6 +101,21 @@ suite "Daemon command construction":
     let cmd = %*{"cmd": "set_eq_preset", "preset": "rock", "id": 5}
     check cmd["preset"].getStr("") == "rock"
 
+  test "unified queue add command":
+    let paths = newJArray()
+    paths.add(%"a.mp3")
+    paths.add(%*{"path": "~/Music/", "title": "", "channel": ""})
+    let cmd = %*{"cmd": "queue", "action": "add", "paths": paths}
+    check cmd["cmd"].getStr("") == "queue"
+    check cmd["action"].getStr("") == "add"
+    check cmd["paths"][0].getStr("") == "a.mp3"
+    check cmd["paths"][1]["path"].getStr("") == "~/Music/"
+
+  test "queue add accepts single path field":
+    let cmd = %*{"cmd": "queue", "action": "add", "path": "/music/song.flac"}
+    check cmd["action"].getStr("") == "add"
+    check cmd["path"].getStr("") == "/music/song.flac"
+
 suite "Response parsing":
   test "parse ok response":
     let raw = """{"id":1,"ok":true,"state":"playing","duration":245.0}"""

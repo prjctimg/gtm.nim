@@ -150,7 +150,14 @@ jobs:
           cp "$GTM_BIN" "gtm-${platform}"
           cp "$GTMD_BIN" "gtmd-${platform}"
 
-          # gtm-full: gtm + gtmd + all manpages
+          # Shell completions (install.sh expects these names at archive root)
+          for c in "completions/gtm.bash" "completions/_gtm" "completions/gtm.fish"; do
+            if [ -f "$c" ]; then
+              cp "$c" "$(basename "$c")"
+            fi
+          done
+
+          # gtm-full: gtm + gtmd + all manpages + completions
           tar czf "gtm-full-${platform}.tar.gz" \
             "gtm-${platform}" \
             "gtmd-${platform}" \
@@ -158,17 +165,23 @@ jobs:
             artifacts/man/gtmd.1 \
             artifacts/man/gtm-config.1 \
             artifacts/man/gtm-keybindings.1 \
-            artifacts/man/gtm-protocol.1
+            artifacts/man/gtm-protocol.1 \
+            gtm.bash \
+            _gtm \
+            gtm.fish
 
           # gtmd: daemon binary + daemon manpage
           tar czf "gtmd-${platform}.tar.gz" \
             "gtmd-${platform}" \
             artifacts/man/gtmd.1
 
-          # gtm: TUI/CLI binary + gtm manpage
+          # gtm: TUI/CLI binary + gtm manpage + completions
           tar czf "gtm-${platform}.tar.gz" \
             "gtm-${platform}" \
-            artifacts/man/gtm.1
+            artifacts/man/gtm.1 \
+            gtm.bash \
+            _gtm \
+            gtm.fish
 
       - uses: actions/upload-artifact@v4
         with:

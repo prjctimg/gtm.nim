@@ -554,6 +554,66 @@ proc advanceToNextTrack(d: Daemon, forward: bool = true): bool =
 when defined(useMpris):
   include mpris
 
+type
+  QueueItem = tuple[path, title, channel: string]
+
+proc parseQueueItems(cmdJson: JsonNode): seq[QueueItem] =
+  var items: seq[QueueItem] = @[]
+  proc collect(entryPath, title, channel: string) =
+    if entryPath.len == 0: return
+    let expanded = loadFromArgs(@[entryPath])
+    if expanded.len == 0:
+      if isUrl(entryPath):
+        items.add((entryPath, title, channel))
+      return
+    for p in expanded:
+      if isUrl(p):
+        items.add((p, title, channel))
+      else:
+        items.add((p, "", ""))
+  let paths = cmdJson{"paths"}
+  if paths.kind == JArray:
+    for item in paths:
+      if item.kind == JString:
+        collect(item.getStr(""), "", "")
+      elif item.kind == JObject:
+        collect(item{"path"}.getStr(""), item{"title"}.getStr(""), item{"channel"}.getStr(""))
+  else:
+    let path = cmdJson{"path"}.getStr("")
+    if path.len > 0:
+      collect(path, cmdJson{"title"}.getStr(""), cmdJson{"channel"}.getStr(""))
+  result = items
+
+proc addQueueItem(d: Daemon, path, title, channel: string, position: int) =
+  if path.len == 0: return
+  if position >= 0 and position < d.playbackQueue.len:
+    d.playbackQueue.insert(path, position)
+  else:
+    d.playbackQueue.add(path)
+  if isYtWatchUrl(path) and path notin d.ytDownloaded:
+    var alreadyDL = false
+    for task in d.ytDownloadTasks:
+      if task.url == path:
+        alreadyDL = true
+        break
+    if not alreadyDL:
+      var task: DownloadTask
+      if startDownload(YtSearchResult(url: path, title: title, channel: channel), d.ytDownloadDir, task.process, d.ytCookieSource, d.ytJsRuntime):
+        task.title = title
+        task.url = path
+        task.channel = channel
+        task.outputDir = d.ytDownloadDir
+        task.completed = false
+        task.startedAt = epochTime()
+        d.ytDownloadTasks.add(task)
+      else:
+        stderr.writeLine("[gtm] Failed to start download for: " & path)
+    if path notin d.ytStreamUrls and not d.ytStreamResolving:
+      d.ytStreamResolveBuf = ""
+      d.ytStreamResolveUrl = path
+      discard startStreamUrlFetch(path, d.ytStreamResolveProcess, d.ytCookieSource, d.ytJsRuntime)
+      d.ytStreamResolving = true
+
 proc executeQueueCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNode =
   result = %*{"ok": true}
   case action
@@ -568,75 +628,14 @@ proc executeQueueCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNode
     d.shuffleIndex = 0
     d.sendQueueEvent()
   of "add":
-    let path = cmdJson{"path"}.getStr("")
-    let position = cmdJson{"position"}.getInt(-1)
-    if path.len > 0:
-      if position >= 0 and position < d.playbackQueue.len:
-        d.playbackQueue.insert(path, position)
-      else:
-        d.playbackQueue.add(path)
-      if isYtWatchUrl(path) and path notin d.ytDownloaded:
-        var alreadyDL = false
-        for task in d.ytDownloadTasks:
-          if task.url == path:
-            alreadyDL = true
-            break
-        if not alreadyDL:
-          var task: DownloadTask
-          if startDownload(YtSearchResult(url: path), d.ytDownloadDir, task.process, d.ytCookieSource, d.ytJsRuntime):
-            task.title = ""
-            task.url = path
-            task.outputDir = d.ytDownloadDir
-            task.completed = false
-            task.startedAt = epochTime()
-            d.ytDownloadTasks.add(task)
-          else:
-            stderr.writeLine("[gtm] Failed to start download for: " & path)
-        if path notin d.ytStreamUrls and not d.ytStreamResolving:
-          d.ytStreamResolveBuf = ""
-          d.ytStreamResolveUrl = path
-          discard startStreamUrlFetch(path, d.ytStreamResolveProcess, d.ytCookieSource, d.ytJsRuntime)
-          d.ytStreamResolving = true
+    var position = cmdJson{"position"}.getInt(-1)
+    var added = 0
+    for item in parseQueueItems(cmdJson):
+      addQueueItem(d, item.path, item.title, item.channel, position)
+      inc added
+      position = -1
+    result["added"] = %added
     d.sendQueueEvent()
-  of "add_many":
-    let paths = cmdJson{"paths"}
-    if paths.kind == JArray:
-      for item in paths:
-        var path = ""
-        var title = ""
-        var channel = ""
-        if item.kind == JString:
-          path = item.getStr("")
-        elif item.kind == JObject:
-          path = item{"path"}.getStr("")
-          title = item{"title"}.getStr("")
-          channel = item{"channel"}.getStr("")
-        if path.len > 0:
-          d.playbackQueue.add(path)
-          if isYtWatchUrl(path) and path notin d.ytDownloaded:
-            var alreadyDL = false
-            for task in d.ytDownloadTasks:
-              if task.url == path:
-                alreadyDL = true
-                break
-            if not alreadyDL:
-              var task: DownloadTask
-              if startDownload(YtSearchResult(url: path, title: title, channel: channel), d.ytDownloadDir, task.process, d.ytCookieSource, d.ytJsRuntime):
-                task.title = title
-                task.url = path
-                task.channel = channel
-                task.outputDir = d.ytDownloadDir
-                task.completed = false
-                task.startedAt = epochTime()
-                d.ytDownloadTasks.add(task)
-              else:
-                stderr.writeLine("[gtm] Failed to start download for: " & path)
-            if path notin d.ytStreamUrls and not d.ytStreamResolving:
-              d.ytStreamResolveBuf = ""
-              d.ytStreamResolveUrl = path
-              discard startStreamUrlFetch(path, d.ytStreamResolveProcess, d.ytCookieSource, d.ytJsRuntime)
-              d.ytStreamResolving = true
-      d.sendQueueEvent()
   of "remove":
     let index = cmdJson{"index"}.getInt(0)
     if index >= 0 and index < d.playbackQueue.len:
@@ -651,17 +650,15 @@ proc executeQueueCommand(d: Daemon, action: string, cmdJson: JsonNode): JsonNode
       d.playbackQueue.insert(track, toIdx)
     d.sendQueueEvent()
   of "set":
-    let paths = cmdJson{"paths"}
-    if paths.kind == JArray:
-      d.playbackQueue = @[]
-      for item in paths:
-        if item.kind == JString:
-          let path = item.getStr("")
-          if path.len > 0:
-            d.playbackQueue.add(path)
+    d.playbackQueue = @[]
+    d.shuffleOrder = @[]
+    d.shuffleIndex = 0
+    for item in parseQueueItems(cmdJson):
+      addQueueItem(d, item.path, item.title, item.channel, -1)
     let startIdx = cmdJson{"start_idx"}.getInt(0)
     if startIdx >= 0 and startIdx < d.playbackQueue.len:
       d.shuffleIndex = startIdx
+    result["total"] = %d.playbackQueue.len
     d.sendQueueEvent()
   else:
     result["ok"] = %false

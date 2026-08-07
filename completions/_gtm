@@ -1,0 +1,76 @@
+#compdef gtm
+# zsh completions for gtm (TUI + CLI)
+#
+# Install: copy into $fpath as _gtm (e.g. $PREFIX/share/zsh/vendor-completions/_gtm).
+
+_gtm() {
+  local -a commands
+  commands=(
+    'play:Play a file, URL or stream'
+    'pause:Toggle play/pause'
+    'toggle:Toggle play/pause'
+    'stop:Stop playback'
+    'next:Skip to next track'
+    'prev:Go to previous track'
+    'volume:Get or set volume (0-100)'
+    'shuffle:Toggle shuffle mode'
+    'repeat:Set repeat mode (off/one/all)'
+    'sleep:Set sleep timer in minutes'
+    'status:Show current playback status'
+    'now:Show current track info'
+    'queue:Manage the playback queue'
+    'kill:Stop the daemon process'
+    'daemon:Start the background daemon'
+    'help:Show help and exit'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    _arguments '--help[Show help and exit]' '--version[Show version and exit]' \
+      '-h[Show help and exit]' '-v[Show version and exit]' '--debug[Enable debug logging]'
+    return
+  fi
+
+  case "$words[2]" in
+    queue)
+      local -a qactions
+      qactions=(
+        'list:Show the playback queue'
+        'add:Add files, URLs or folders to the queue'
+        'remove:Remove a queue item by index'
+        'move:Move a queue item to another index'
+        'clear:Clear the whole queue'
+        'set:Replace the queue with the given items'
+      )
+      if (( CURRENT == 3 )); then
+        _describe 'queue action' qactions
+      elif (( CURRENT > 3 )); then
+        case "$words[3]" in
+          add|set)
+            _files
+            ;;
+          remove|move)
+            _values 'queue index' 0 1 2 3 4 5 6 7 8 9
+            ;;
+        esac
+      fi
+      ;;
+    play)
+      _files
+      ;;
+    volume)
+      _values 'volume' 0 10 20 30 40 50 60 70 80 90 100
+      ;;
+    shuffle)
+      _values 'shuffle mode' on off true false 1 0
+      ;;
+    repeat)
+      _values 'repeat mode' off one all 0 1 2
+      ;;
+    sleep)
+      _values 'minutes' 5 10 15 30 60 90 120
+      ;;
+  esac
+}
+
+_gtm "$@"

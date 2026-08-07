@@ -18,16 +18,13 @@ proc findDepPath(name: string): string =
   let relative = projectDir / ".." / ".." / "sources" / name / "src"
   if dirExists(relative):
     return relative
-  for kind, dir in walkDir(getHomeDir() / ".nimble" / "pkgs"):
-    if kind == pcDir and dir.startsWith(getHomeDir() / ".nimble" / "pkgs" / name):
-      let srcDir = dir / "src"
-      if dirExists(srcDir):
-        return srcDir
-  for kind, dir in walkDir(getHomeDir() / ".nimble" / "pkgs2"):
-    if kind == pcDir and dir.startsWith(getHomeDir() / ".nimble" / "pkgs2" / name):
-      let srcDir = dir / "src"
-      if dirExists(srcDir):
-        return srcDir
+  for pkgRoot in [getHomeDir() / ".nimble" / "pkgs", getHomeDir() / ".nimble" / "pkgs2"]:
+    for kind, dir in walkDir(pkgRoot):
+      if kind == pcDir and dir.startsWith(pkgRoot / name):
+        let srcDir = dir / "src"
+        if dirExists(srcDir):
+          return srcDir
+        return dir
   quit("Cannot find dependency '" & name & "'. Set the " & envVar & " environment variable or install the package via nimble.")
 
 proc gitVersion(): string =

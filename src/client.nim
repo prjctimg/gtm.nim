@@ -588,7 +588,25 @@ proc queueAdd*(cli: DaemonClient, items: seq[tuple[path, title, channel: string]
   var paths = newJArray()
   for (path, title, channel) in items:
     paths.add(%*{"path": path, "title": title, "channel": channel})
-  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "add_many", "paths": paths})
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "add", "paths": paths})
+
+proc queueAddPaths*(cli: DaemonClient, paths: seq[string]): JsonNode =
+  cli.ensureDaemon()
+  var arr = newJArray()
+  for p in paths:
+    arr.add(%p)
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "add", "paths": arr})
+
+proc queueMove*(cli: DaemonClient, fromIdx, toIdx: int): JsonNode =
+  cli.ensureDaemon()
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "move", "from": fromIdx, "to": toIdx})
+
+proc queueSet*(cli: DaemonClient, paths: seq[string]): JsonNode =
+  cli.ensureDaemon()
+  var arr = newJArray()
+  for p in paths:
+    arr.add(%p)
+  sendDaemonCmd(cli, %*{"cmd": "queue", "action": "set", "paths": arr})
 
 proc queueRemove*(cli: DaemonClient, index: int): JsonNode =
   cli.ensureDaemon()

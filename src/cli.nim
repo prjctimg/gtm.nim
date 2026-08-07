@@ -5,7 +5,7 @@ type
   Subcommand* = enum
     scNone, scPlay, scPause, scStop, scNext, scPrev, scToggle,
     scVolume, scShuffle, scRepeat, scSleep,
-    scStatus, scNow, scKill, scDaemon, scHelp, scVersion
+    scStatus, scNow, scKill, scDaemon, scQueue, scHelp, scVersion
 
   CliArgs* = object
     subcmd*: Subcommand
@@ -14,6 +14,11 @@ type
     shuffleEnabled*: bool
     repeatMode*: int
     sleepMinutes*: int
+    queueAction*: string
+    queueTargets*: seq[string]
+    queueIndex*: int
+    queueFrom*: int
+    queueTo*: int
 
 proc parseSubcmd(name: string): Subcommand =
   case name
@@ -30,6 +35,7 @@ proc parseSubcmd(name: string): Subcommand =
   of "now": scNow
   of "kill": scKill
   of "daemon": scDaemon
+  of "queue": scQueue
   of "help", "--help", "-h": scHelp
   of "--version", "-v": scVersion
   else: scNone
@@ -64,6 +70,25 @@ proc parseArgs*(args: seq[string] = os.commandLineParams()): CliArgs =
     if args.len > 1:
       try: result.sleepMinutes = parseInt(args[1])
       except: result.sleepMinutes = 5
+  of scQueue:
+    if args.len > 1:
+      result.queueAction = args[1].toLowerAscii()
+      case result.queueAction
+      of "add", "set":
+        if args.len > 2:
+          result.queueTargets = args[2..^1]
+      of "remove":
+        if args.len > 2:
+          try: result.queueIndex = parseInt(args[2])
+          except: result.queueIndex = 0
+      of "move":
+        if args.len > 3:
+          try: result.queueFrom = parseInt(args[2])
+          except: discard
+          try: result.queueTo = parseInt(args[3])
+          except: discard
+    else:
+      result.queueAction = "list"
   of scPlay:
     result.targets = loadFromArgs(args[1..^1])
   else: discard
@@ -165,6 +190,42 @@ proc execSubcommand*(args: CliArgs): bool =
     else: echo "No daemon running"
   of scDaemon:
     discard
+  of scQueue:
+    var cli = newDaemonClient()
+    cli.ensureDaemon()
+    case args.queueAction
+    of "add":
+      if args.queueTargets.len == 0:
+        echo "Usage: gtm queue add <path|url|dir> ..."
+      else:
+        let resp = cli.queueAddPaths(args.queueTargets)
+        echo "Added ", resp{"added"}.getInt(args.queueTargets.len), " item(s) to queue"
+    of "remove":
+      discard cli.queueRemove(args.queueIndex)
+      echo "Removed queue item ", args.queueIndex
+    of "move":
+      discard cli.queueMove(args.queueFrom, args.queueTo)
+      echo "Moved queue item ", args.queueFrom, " to ", args.queueTo
+    of "clear":
+      discard cli.queueClear()
+      echo "Queue cleared"
+    of "set":
+      if args.queueTargets.len == 0:
+        echo "Usage: gtm queue set <path|url|dir> ..."
+      else:
+        let resp = cli.queueSet(args.queueTargets)
+        echo "Queue replaced with ", resp{"total"}.getInt(args.queueTargets.len), " item(s)"
+    else:
+      let resp = cli.queueList()
+      if resp.hasKey("queue"):
+        let q = resp["queue"]
+        if q.len == 0:
+          echo "Queue is empty"
+        else:
+          for i in 0..<q.len:
+            echo i, ": ", q[i].getStr("")
+      else:
+        echo "Could not read queue"
   of scHelp:
     echo "Usage: gtm [subcommand] [args]"
     echo ""
@@ -182,6 +243,12 @@ proc execSubcommand*(args: CliArgs): bool =
     echo "  sleep [minutes]    Set sleep timer in minutes"
     echo "  status            Show current playback status"
     echo "  now               Show current track info"
+    echo "  queue             Show the playback queue"
+    echo "  queue add <p>...  Add files, URLs or folders to the queue"
+    echo "  queue remove <i>  Remove queue item at index i"
+    echo "  queue move <f> <t> Move queue item from index f to t"
+    echo "  queue clear       Clear the queue"
+    echo "  queue set <p>...  Replace the queue with the given items"
     echo "  kill              Stop the daemon process"
     echo "  help              Show this help"
     echo "  --version, -v     Show version information"
@@ -190,6 +257,8 @@ proc execSubcommand*(args: CliArgs): bool =
     echo "  gtm                     Launch TUI"
     echo "  gtm ~/Music/album/      Scan directory and launch TUI"
     echo "  gtm play song.mp3       Play a file"
+    echo "  gtm queue add ~/Music/  Add a whole folder to the queue"
+    echo "  gtm queue add a.mp3 b.mp3"
     echo "  gtm pause               Toggle pause from terminal"
     echo "  gtm volume 50           Set volume to 50%"
     echo "  gtm next                Next track"
