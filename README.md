@@ -55,8 +55,8 @@ The codebase mirrors the architecture of the gtm spec, with the TUI client talki
 |---|---|
 | `src/gtm.nim` | TUI client entry point |
 | `src/gtmd.nim` | Daemon entry point |
-| `src/daemon.nim` | Daemon — manages queue, library, IPC socket, FFmpeg playback |
-| `src/client.nim` | `DaemonClient` — IPC client over Unix socket |
+| `src/daemon.nim` | Daemon: manages queue, library, IPC socket, FFmpeg playback |
+| `src/client.nim` | `DaemonClient`: IPC client over Unix socket |
 | `src/cli.nim` | CLI mode and subcommands |
 | `src/audio.nim` | Audio backends (FFmpeg, mixer with crossfade/EQ, daemon client) |
 | `src/library.nim` | SQLite library database |
@@ -101,7 +101,7 @@ Feel free to [fork off](https://github.com/prjctimg/gtm.nim/fork) though and on 
 
 > ## License 📜
 >
-> (c) 2025 - present, [prjctimg](https://prjctimg.me)
+> (c) 2026 - present, [prjctimg](https://prjctimg.me)
 >
 > This is free software, released under the GPL-3.0 license.
 

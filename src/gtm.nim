@@ -774,7 +774,7 @@ proc adjustSetting(state: var AppState, delta: int) =
       if state.player of DaemonClient:
         DaemonClient(state.player).setCrossfadeCurve(state.crossfadeCurve.ord)
       state.saveConfig()
-    of 3: # Daemon — info only
+    of 3: # Daemon: info only
       discard
     of 4: # Gapless
       state.gapless = not state.gapless
@@ -825,9 +825,9 @@ proc adjustSetting(state: var AppState, delta: int) =
     else: discard
   of scYouTube:
     case state.selectIndex
-    of 0: # Cookie Source — detect on Enter only
+    of 0: # Cookie Source: detect on Enter only
       discard
-    of 1: # JS Runtime — cycle
+    of 1: # JS Runtime: cycle
       const runtimes = ["node", "bun", "deno"]
       var i = 0
       for idx, r in runtimes:
@@ -842,16 +842,16 @@ proc adjustSetting(state: var AppState, delta: int) =
     of 3: # Results Per Page
       state.ytSearchPageSize = max(5, min(50, state.ytSearchPageSize + delta * 5))
       state.saveConfig()
-    of 4: # Search History — info on Enter only
+    of 4: # Search History: info on Enter only
       discard
     of 5: # Batch Mode
       state.ytBatchDownloadMode = not state.ytBatchDownloadMode
-    of 6: # Clear Search History — action on Enter only
+    of 6: # Clear Search History: action on Enter only
       discard
     else: discard
   of scAppearance:
     case state.selectIndex
-    of 0: # Theme — open picker on Enter only
+    of 0: # Theme: open picker on Enter only
       discard
     of 1: # Refresh Theme
       state.config.refreshTheme = not state.config.refreshTheme
@@ -874,7 +874,7 @@ proc adjustSetting(state: var AppState, delta: int) =
       if state.player of DaemonClient:
         DaemonClient(state.player).ipcTimeoutSec = float(state.config.ipcTimeout)
       state.saveConfig()
-    of 2: # Reset All — action on Enter only
+    of 2: # Reset All: action on Enter only
       discard
     else: discard
   state.rebuildItems()
@@ -1825,7 +1825,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
         if state.queueCursor >= state.upNextScrollOffset + maxVisible:
           state.upNextScrollOffset = state.queueCursor - maxVisible + 1
       else:
-        state.setFeedback("Queue is empty — press i to add tracks")
+        state.setFeedback("Queue is empty: press i to add tracks")
     else: state.moveSelection(1)
   of iw.Key.Up:
     if state.tab == tabNowPlaying and state.overlay.kind == okNone:
@@ -1834,7 +1834,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
         if state.queueCursor < state.upNextScrollOffset:
           state.upNextScrollOffset = state.queueCursor
       else:
-        state.setFeedback("Queue is empty — press i to add tracks")
+        state.setFeedback("Queue is empty: press i to add tracks")
     else: state.moveSelection(-1)
   of iw.Key.Enter:
     if state.isPlaylistView():
@@ -1872,7 +1872,7 @@ proc handleKey(state: var AppState, key: iw.Key, chars: seq[Rune]) =
         of 0: # Cookie Source
           state.ytCookieSource = detectBrowserCookieSource()
           if state.ytCookieSource.len == 0:
-            state.setFeedback("No browser cookie database found — install Firefox and sign in to YouTube")
+            state.setFeedback("No browser cookie database found: install Firefox and sign in to YouTube")
           else:
             state.showNotification("Detected cookies: " & state.ytCookieSource)
           state.saveConfig()
@@ -2164,11 +2164,11 @@ proc processEvents(state: var AppState) =
             state.selectIndex = i
             break
       state.markDirtyBatch(cePlayState, ceTrack)
-      # Show Now Playing notification (skip if auto-advanced — "Up Next" was already shown)
+      # Show Now Playing notification (skip if auto-advanced: "Up Next" was already shown)
       if not autoAdvanced:
         if state.currentPlayingTitle.len > 0:
           state.showNotification("Now Playing: " & state.currentPlayingTitle &
-            (if state.currentPlayingChannel.len > 0: " — " & state.currentPlayingChannel else: ""))
+            (if state.currentPlayingChannel.len > 0: ": " & state.currentPlayingChannel else: ""))
         elif state.currentPlayingPath.len > 0:
           state.showNotification("Now Playing")
       state.upNextTimer = 0
@@ -2177,7 +2177,7 @@ proc processEvents(state: var AppState) =
         for i in 0..<state.libraryTracks.len:
           if state.libraryTracks[i].id == state.currentPlayingId:
             let t = state.libraryTracks[i]
-            state.nowPlayingCueMsg = "Now Playing: " & t.title & (if t.artist.len > 0: " — " & t.artist else: "")
+            state.nowPlayingCueMsg = "Now Playing: " & t.title & (if t.artist.len > 0: ": " & t.artist else: "")
             state.nowPlayingCueTimer = 150
             break
     of aekPlaybackPaused:
@@ -2195,7 +2195,7 @@ proc processEvents(state: var AppState) =
       state.timePos = 0.0
       state.basePos = 0.0
       state.baseTime = epochTime()
-      # Consume queue — daemon already advanced
+      # Consume queue: daemon already advanced
       if state.playbackQueue.len > 0:
         state.playbackQueue.delete(0)
         state.markDirty(ceQueue)
@@ -2239,7 +2239,7 @@ proc processEvents(state: var AppState) =
         let nextChannel = ev.metadata.getOrDefault("next_channel", "")
         if nextTitle.len > 0:
           state.upNextMsg = "Up Next: " & nextTitle &
-            (if nextChannel.len > 0: " — " & nextChannel else: "")
+            (if nextChannel.len > 0: ": " & nextChannel else: "")
         else:
           let nextPath = ev.metadata.getOrDefault("next_path", "")
           if nextPath.len > 0:
@@ -2507,12 +2507,12 @@ proc runTui(args: seq[string]) =
           if not ctx.data.reconnecting:
             ctx.data.reconnecting = true
             ctx.data.reconnectAttempts = 0
-            ctx.data.setFeedback("[Daemon disconnected — reconnecting...]", nkWarning)
+            ctx.data.setFeedback("[Daemon disconnected: reconnecting...]", nkWarning)
             ctx.data.markDirty(ceReconnecting)
           if ctx.data.reconnectAttempts >= 30:
             if not ctx.data.giveUpReconnect:
               ctx.data.giveUpReconnect = true
-              ctx.data.setFeedback("[Daemon unreachable after 30 attempts — giving up]", nkError)
+              ctx.data.setFeedback("[Daemon unreachable after 30 attempts: giving up]", nkError)
               ctx.data.markDirty(ceReconnecting)
           else:
             cli.ensureDaemon()

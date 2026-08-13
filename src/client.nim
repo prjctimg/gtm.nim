@@ -32,7 +32,7 @@ proc daemonIsRunning*(): bool =
       if pid > 0:
         result = posix.kill(pid.cint, 0) == 0
         if not result:
-          # Stale PID — remove file
+          # Stale PID: remove file
           try: removeFile(p) except: discard
     except:
       try: removeFile(p) except: discard
@@ -79,8 +79,8 @@ proc ensureDaemon*(cli: DaemonClient) =
   let now = epochTime()
   if now < cli.nextRetryAt: return
   # Per client.md §Connection retry (initial) and §Reconnection (post-loss):
-  #   initial:  100, 200, 400, 800, 1600, 3200, 5000 cap — 10 attempts
-  #   reconnect: 500, 1000, 2000, 4000, 8000, 10000 cap — 30 attempts
+  #   initial:  100, 200, 400, 800, 1600, 3200, 5000 cap: 10 attempts
+  #   reconnect: 500, 1000, 2000, 4000, 8000, 10000 cap: 30 attempts
   # connectionAttempts is reset to 0 on a successful handshake.
   let maxAttempts = if cli.firstConnection: 10 else: 30
   let capMs = if cli.firstConnection: 5000 else: 10000

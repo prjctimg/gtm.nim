@@ -2,7 +2,7 @@
 version     = "0.4.9"
 author      = "prjctimg"
 description = "Terminal music player based on FFmpeg and nimwave. "
-license     = "MIT"
+license     = "GPL-3.0"
 srcDir      = "src"
 bin         = @["gtm"]
 

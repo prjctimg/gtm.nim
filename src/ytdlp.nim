@@ -275,7 +275,7 @@ proc finishPlaylistFetch*(p: var Process, buf: var string): seq[YtSearchResult] 
   buf = ""
 
 proc fetchPlaylistTracks*(url: string; cookieSource: string = ""; jsRuntime: string = "node"): YtPlaylistDetail =
-  ## Legacy blocking version — still used for backward compat but UNCHANGED internally.
+  ## Legacy blocking version: still used for backward compat but UNCHANGED internally.
   ## New code should use startPlaylistFetch/pollPlaylistFetch/finishPlaylistFetch.
   let yt = findYtdlp()
   if yt.len == 0: return YtPlaylistDetail()

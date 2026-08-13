@@ -286,7 +286,7 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
   if track.path.len == 0 and state.currentPlayingPath.len == 0:
     writeStr(ctx.tb, 1, 1, "No track selected", theme.subtext0)
     if not state.audioAvailable:
-      writeStr(ctx.tb, 1, 2, truncateAt("Audio device unavailable — no sound output", w - 2), theme.red)
+      writeStr(ctx.tb, 1, 2, truncateAt("Audio device unavailable: no sound output", w - 2), theme.red)
     writeStr(ctx.tb, 1, 3, truncateAt("Add music with: gtm <file|url>", w - 2), theme.subtext0)
     return
   var line = 0
@@ -296,7 +296,7 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
   let titleTrunc = if title.runeLen > w - 4: truncateAt(title, w - 3) else: title
   writeStr(ctx.tb, 1, line, titleTrunc, theme.text)
   line.inc
-  # Artist — Album row
+  # Artist: Album row
   let artistStr = track.displayArtist()
   let albumStr = track.displayAlbum()
   let artistAlbum = artistStr & "  \u2014  " & albumStr
@@ -341,7 +341,7 @@ method render*(node: NowPlayingView, ctx: var nw.Context[AppState]) =
   line.inc
   writeStr(ctx.tb, 1, line, "\u2500".repeat(min(w - 2, 36)), theme.surface2)
   line.inc
-  # Up Next — scrollable
+  # Up Next: scrollable
   if w >= 40:
     writeStr(ctx.tb, 1, line, "Up Next", theme.sky)
     line.inc
@@ -432,7 +432,7 @@ method render*(node: LibrarySidebar, ctx: var nw.Context[AppState]) =
     writeStr(ctx.tb, 1, line, display, fg)
     writeStr(ctx.tb, w - countStr.runeLen - 1, line, countStr, theme.overlay0)
     line.inc
-    # Downloads is a single item — no sub-tabs
+    # Downloads is a single item: no sub-tabs
   line.inc
   if line < h:
     writeStr(ctx.tb, 1, line, "\u2500".repeat(min(w - 2, 16)), theme.surface2)
@@ -1329,7 +1329,7 @@ method render*(node: HelpOverlay, ctx: var nw.Context[AppState]) =
   let boxY = (h - boxH) div 2
   fillBg(ctx.tb, boxX, boxY, boxX + boxW - 1, boxY + boxH - 1, theme.surface0)
   drawRoundedRect(ctx.tb, boxX, boxY, boxX + boxW - 1, boxY + boxH - 1, theme.mauve)
-  writeStr(ctx.tb, boxX + 2, boxY + 1, " Help — Keybindings ", theme.mauve)
+  writeStr(ctx.tb, boxX + 2, boxY + 1, " Help: Keybindings ", theme.mauve)
   var y = boxY + 3
   let col1x = boxX + 3
   let col2x = boxX + 17

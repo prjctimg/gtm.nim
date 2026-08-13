@@ -1650,7 +1650,7 @@ proc runDaemon*() =
   if crashFile.open(crashPath, fmAppend):
     let crashFd = crashFile.getFileHandle
     if debugMode:
-      stderr.writeLine("[gtmd] GTM Daemon v" & GTM_VERSION & " starting — pid: " & $getpid() & ", socket: " & sockPath())
+      stderr.writeLine("[gtmd] GTM Daemon v" & GTM_VERSION & " starting: pid: " & $getpid() & ", socket: " & sockPath())
     else:
       discard dup2(cint(crashFd), cint(1))
       discard dup2(cint(crashFd), cint(2))
@@ -1957,7 +1957,7 @@ proc runDaemon*() =
           daemon.sendQueueEvent()
         elif daemon.gaplessNextPath.len > 0:
           # Gapless: the mixer already promoted the slave to master at EOF,
-          # so do not reload the track — only fix up bookkeeping.
+          # so do not reload the track: only fix up bookkeeping.
           discard daemon.nextTrackFromQueue()
           daemon.pushTrackHistory(daemon.gaplessNextPath)
           daemon.currentTrackPath = daemon.gaplessNextPath
