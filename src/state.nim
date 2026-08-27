@@ -460,7 +460,7 @@ type
     scrobble*: ScrobbleConfigState
 
 proc stateDir*(): string =
-  # Per gtm.spec protocol.md §Socket Locations fallback chain:
+  # Socket Locations fallback chain:
   #   $XDG_RUNTIME_DIR/gtm  ->  /tmp/gtm-$USER/gtm  ->
   #   $TMPDIR/gtm  ->  $HOME/.gtm/gtm
   let xdg = getEnv("XDG_RUNTIME_DIR", "")

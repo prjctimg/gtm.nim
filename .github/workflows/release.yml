@@ -7,15 +7,14 @@
 #     ▼
 #   build job       → for each OS/arch:
 #     │                1. nimble build --release (nim c -d:release)
-#     │                2. Generate manpages (pandoc)
-#     │                3. Package archives:
-#     │                   gtm-full-{platform}.tar.gz  (gtm + gtmd + man)
-#     │                   gtmd-{platform}.tar.gz      (gtmd only + daemon man)
-#     │                   gtm-{platform}.tar.gz       (gtm only + gtm man)
-#     │                4. Upload build artifacts
+#     │                2. Package archives:
+#     │                   gtm-full-{platform}.tar.gz  (gtm + gtmd + completions)
+#     │                   gtmd-{platform}.tar.gz      (gtmd only)
+#     │                   gtm-{platform}.tar.gz       (gtm only + completions)
+#     │                3. Upload build artifacts
 #     │
 #     ▼
-#   release job     → create GitHub Release with all archives + manpages
+#   release job     → create GitHub Release with all archives
 #
 name: Release
 
@@ -76,11 +75,11 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: startsWith(matrix.os, 'ubuntu')
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev libavformat-dev libavcodec-dev libavutil-dev libswresample-dev pandoc
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
 
       - name: Install system dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
-        run: brew install pandoc ffmpeg pkg-config
+        run: brew install ffmpeg pkg-config
 
       - name: Install Nim via choosenim
         run: |
@@ -88,10 +87,6 @@ jobs:
             curl https://nim-lang.org/choosenim/init.sh -sSf | bash -s -- -y
             echo "$HOME/.nimble/bin" >> "$GITHUB_PATH"
           fi
-
-      - name: Clone gtm.spec
-        run: |
-          git clone https://github.com/prjctimg/gtm.spec.git
 
       - name: Install nimble dependencies
         run: |
@@ -122,14 +117,6 @@ jobs:
           echo "=== bin/ ==="
           ls -la bin/ 2>/dev/null || true
 
-      - name: Generate manpages
-        run: |
-          mkdir -p artifacts/man
-          for md in gtm.spec/man/*.1.md; do
-            name=$(basename "$md" .1.md)
-            pandoc "$md" -s -t man -o "artifacts/man/${name}.1"
-          done
-
       - name: Package binaries
         shell: bash
         run: |
@@ -150,35 +137,28 @@ jobs:
           cp "$GTM_BIN" "gtm-${platform}"
           cp "$GTMD_BIN" "gtmd-${platform}"
 
-          # Shell completions (install.sh expects these names at archive root)
+          # Shell completions at archive root
           for c in "completions/gtm.bash" "completions/_gtm" "completions/gtm.fish"; do
             if [ -f "$c" ]; then
               cp "$c" "$(basename "$c")"
             fi
           done
 
-          # gtm-full: gtm + gtmd + all manpages + completions
+          # gtm-full: gtm + gtmd + completions
           tar czf "gtm-full-${platform}.tar.gz" \
             "gtm-${platform}" \
             "gtmd-${platform}" \
-            artifacts/man/gtm.1 \
-            artifacts/man/gtmd.1 \
-            artifacts/man/gtm-config.1 \
-            artifacts/man/gtm-keybindings.1 \
-            artifacts/man/gtm-protocol.1 \
             gtm.bash \
             _gtm \
             gtm.fish
 
-          # gtmd: daemon binary + daemon manpage
+          # gtmd: daemon binary only
           tar czf "gtmd-${platform}.tar.gz" \
-            "gtmd-${platform}" \
-            artifacts/man/gtmd.1
+            "gtmd-${platform}"
 
-          # gtm: TUI/CLI binary + gtm manpage + completions
+          # gtm: TUI/CLI binary + completions
           tar czf "gtm-${platform}.tar.gz" \
             "gtm-${platform}" \
-            artifacts/man/gtm.1 \
             gtm.bash \
             _gtm \
             gtm.fish
@@ -190,7 +170,6 @@ jobs:
             gtm-full-*.tar.gz
             gtmd-*.tar.gz
             gtm-*.tar.gz
-            artifacts/man/*
 
   release:
     needs: [tag, build]
@@ -208,7 +187,7 @@ jobs:
       - name: Collect release files
         run: |
           echo "=== Release artifacts ==="
-          find . -type f \( -name "gtm-full-*" -o -name "gtmd-*" -o -name "gtm-*" -o -path "*/man/*" \) | sort
+          find . -type f \( -name "gtm-full-*" -o -name "gtmd-*" -o -name "gtm-*" \) | sort
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -219,4 +198,3 @@ jobs:
             gtm-full-*.tar.gz
             gtmd-*.tar.gz
             gtm-*.tar.gz
-            artifacts/man/*

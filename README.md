@@ -1,24 +1,18 @@
+> ## ⚠️ Archived
+>
+> This project is **no longer maintained** and has been archived.
+> Please use the Rust implementation, **[gtm.rs](https://github.com/prjctimg/gtm.rs)**, instead.
+
 # gtm.nim 👑
 
-[![Version](https://img.shields.io/github/v/release/prjctimg/gtm)](https://github.com/prjctimg/gtm/releases/latest)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Nim 2.0+](https://img.shields.io/badge/nim-2.0+-orange.svg)](https://nim-lang.org)
 
-Feature rich terminal audio player with background playback support and YouTube/Spotify integration. The original Nim implementation of the [gtm spec](https://github.com/prjctimg/gtm.spec).
+Feature rich terminal audio player with background playback support and YouTube/Spotify integration. The original Nim implementation, superseded by [gtm.rs](https://github.com/prjctimg/gtm.rs).
 
 ## Install
 
-You can use the shared [`install.sh`](https://github.com/prjctimg/gtm.spec/blob/main/install.sh) script for an interactive, hassle free installation. It asks which implementation (gtm.rs or gtm.nim) and which install type you want:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/prjctimg/gtm.spec/main/install.sh | bash
-```
-
-Or pick this implementation directly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/prjctimg/gtm.spec/main/install.sh | bash -s -- --impl nim
-```
+> This implementation is archived. Please use [gtm.rs](https://github.com/prjctimg/gtm.rs) instead.
 
 ### Build from Source
 
@@ -49,7 +43,7 @@ Grab one for your target system from the [releases page](https://github.com/prjc
 
 ## Codebase layout
 
-The codebase mirrors the architecture of the gtm spec, with the TUI client talking to a background daemon over a Unix socket:
+The TUI client talks to a background daemon over a Unix socket. This codebase was superseded by [gtm.rs](https://github.com/prjctimg/gtm.rs):
 
 | File | Description |
 |---|---|
@@ -70,10 +64,8 @@ The codebase mirrors the architecture of the gtm spec, with the TUI client talki
 
 ## Docs
 
+- [gtm.rs](https://github.com/prjctimg/gtm.rs) — the maintained successor
 - [Wiki](https://github.com/prjctimg/gtm.nim/wiki)
-- [gtm.spec](https://github.com/prjctimg/gtm.spec)
-- [gtm-config(1)](https://github.com/prjctimg/gtm.spec.wiki/Manpages)
-- [gtm-keybindings(1)](https://github.com/prjctimg/gtm.spec.wiki/Manpages)
 
 ## Dependencies
 
@@ -93,9 +85,7 @@ System dependencies: Nim 2.0+, GCC (compiles the vendored C code), FFmpeg develo
 
 ## Contributing
 
-I'm currently unable to handle external contributions because I'm actively working on it and any bugs or issues you may notice  may well already be noted . Also I am doing this for fun and learning reasons.
-
-Feel free to [fork off](https://github.com/prjctimg/gtm.nim/fork) though and on your way out don't forget to  checkout the [gtm spec](https://github.com/prjctimg/gtm.spec) for some domain specific notes on the reasons why the code is structured as it is.
+This project is no longer maintained. Please use [gtm.rs](https://github.com/prjctimg/gtm.rs) instead. You may still [fork](https://github.com/prjctimg/gtm.nim/fork) this codebase.
 
 ---
 
